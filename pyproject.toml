@@ -1,0 +1,64 @@
+[project]
+name = "youtube-to-bilibili"
+version = "0.1.0"
+description = "YouTube to Bilibili video transfer tool for computer science content"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "requests>=2.31.0",
+    "beautifulsoup4>=4.12.0",
+    "lxml>=5.0.0",
+    "pydantic>=2.5.0",
+    "rich>=13.7.0",
+    "click>=8.1.0",
+    "tqdm>=4.66.0",
+    "yt-dlp>=2023.12.30",
+    "aiohttp>=3.9.0",
+    "aiofiles>=23.0.0",
+]
+
+[project.optional-dependencies]
+video = [
+    "moviepy>=1.0.3",
+]
+bilibili = [
+    "bilibili-api-python>=13.1.0",
+]
+translate = [
+    "openai>=1.0.0",
+]
+dev = [
+    "ruff>=0.1.0",
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=23.0.0",
+    "mypy>=1.7.0",
+]
+
+[project.scripts]
+yt2bl = "src.main:cli"
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+select = ["E", "F", "W", "I", "N", "B", "C90"]
+ignore = ["E501", "B008"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.13"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
+python_files = ["test_*.py"]
+addopts = "-v --tb=short"
