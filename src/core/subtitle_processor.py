@@ -3,7 +3,7 @@
 import asyncio
 import re
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 import tempfile
 import json
 
@@ -209,8 +209,8 @@ class SubtitleProcessor:
             for match in matches:
                 subtitle_entry = {
                     "index": int(match[0]),
-                    "start_time": match[1],
-                    "end_time": match[2],
+                    "start": match[1],
+                    "end": match[2],
                     "text": match[3].strip().replace("\n", " "),
                 }
                 subtitles.append(subtitle_entry)
@@ -232,6 +232,191 @@ class SubtitleProcessor:
         except Exception as e:
             logger.error(f"清理字幕临时文件失败: {str(e)}")
 
+    def _srt_time_to_ms(self, time_str: str) -> int:
+        """将SRT时间格式转换为毫秒
+
+        Args:
+            time_str: SRT时间格式 (00:00:00,000)
+
+        Returns:
+            毫秒数
+        """
+        hours = int(time_str[0:2])
+        minutes = int(time_str[3:5])
+        seconds = int(time_str[6:8])
+        milliseconds = int(time_str[9:12])
+        return ((hours * 60 + minutes) * 60 + seconds) * 1000 + milliseconds
+
+    def _ms_to_srt_time(self, ms: int) -> str:
+        """将毫秒转换为SRT时间格式
+
+        Args:
+            ms: 毫秒数
+
+        Returns:
+            SRT时间格式 (00:00:00,000)
+        """
+        milliseconds = ms % 1000
+        ms = ms // 1000
+        seconds = ms % 60
+        ms = ms // 60
+        minutes = ms % 60
+        hours = ms // 60
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
+
+    def fix_subtitle_overlaps(self, srt_path: Path, fps: float = 60.0) -> Path:
+        """修复字幕时间轴重叠问题
+
+        Args:
+            srt_path: SRT字幕文件路径
+            fps: 帧率，用于计算最小间隔
+
+        Returns:
+            修复后的字幕文件路径
+        """
+        try:
+            logger.info(f"正在修复字幕时间轴重叠: {srt_path.name}")
+
+            # 解析字幕
+            subtitles = self._parse_srt_file(srt_path)
+
+            # 修复重叠
+            for i in range(len(subtitles) - 1):
+                current_end = self._srt_time_to_ms(subtitles[i]['end'])
+                next_start = self._srt_time_to_ms(subtitles[i + 1]['start'])
+
+                if current_end >= next_start:
+                    # 调整当前字幕的结束时间，与下一条字幕间隔1帧
+                    new_end_ms = next_start - int(1000 / fps)
+                    subtitles[i]['end'] = self._ms_to_srt_time(new_end_ms)
+                    logger.debug(f"修复重叠: 字幕{i+1}结束时间调整为 {subtitles[i]['end']}")
+
+            # 生成输出路径
+            output_path = srt_path.parent / f"{srt_path.stem}_fixed{srt_path.suffix}"
+
+            # 写入修复后的字幕
+            self._write_srt_file(subtitles, output_path)
+
+            logger.info(f"字幕时间轴修复完成: {output_path.name}")
+            return output_path
+
+        except Exception as e:
+            logger.error(f"修复字幕时间轴失败: {str(e)}")
+            raise
+
+    def merge_subtitle_lines(self, srt_path: Path) -> Path:
+        """将字幕每两行合并为一行
+
+        合并规则：
+        - 使用第一行的开始时间
+        - 使用第二行的结束时间
+        - 文本内容合并，中间用空格分隔
+        - 如果第一行中文字符>20，则不合并，作为单独一行
+
+        Args:
+            srt_path: SRT字幕文件路径
+
+        Returns:
+            合并后的字幕文件路径
+        """
+        try:
+            logger.info(f"正在合并字幕行: {srt_path.name}")
+
+            # 解析字幕
+            subtitles = self._parse_srt_file(srt_path)
+
+            # 每两行合并为一行，但检查中文字符数
+            merged_subtitles = []
+            i = 0
+            while i < len(subtitles):
+                if i + 1 < len(subtitles):
+                    # 有两行，检查是否应该合并
+                    sub1 = subtitles[i]
+                    sub2 = subtitles[i + 1]
+
+                    # 计算第一行的中文字符数
+                    zh_char_count = self._count_chinese_characters(sub1['text'])
+
+                    if zh_char_count > 20:
+                        # 第一行中文字符过多，不合并
+                        logger.debug(f"第一行中文字符过多({zh_char_count}个)，不合并字幕{i+1}")
+                        merged_sub = {
+                            'index': len(merged_subtitles) + 1,
+                            'start': sub1['start'],
+                            'end': sub1['end'],
+                            'text': sub1['text']
+                        }
+                        merged_subtitles.append(merged_sub)
+                        i += 1
+                    else:
+                        # 正常合并两行
+                        merged_sub = {
+                            'index': len(merged_subtitles) + 1,
+                            'start': sub1['start'],
+                            'end': sub2['end'],
+                            'text': f"{sub1['text']} {sub2['text']}"
+                        }
+                        merged_subtitles.append(merged_sub)
+                        logger.debug(f"合并: 字幕{i+1}和{i+2} -> 字幕{len(merged_subtitles)}")
+                        i += 2
+                else:
+                    # 只剩一行，直接添加
+                    sub = subtitles[i]
+                    merged_sub = {
+                        'index': len(merged_subtitles) + 1,
+                        'start': sub['start'],
+                        'end': sub['end'],
+                        'text': sub['text']
+                    }
+                    merged_subtitles.append(merged_sub)
+                    logger.debug(f"保留: 字幕{i+1}（无法配对）")
+                    i += 1
+
+            # 生成输出路径
+            output_path = srt_path.parent / f"{srt_path.stem}_merged{srt_path.suffix}"
+
+            # 写入合并后的字幕
+            self._write_srt_file(merged_subtitles, output_path)
+
+            logger.info(f"字幕行合并完成: {output_path.name} (从{len(subtitles)}行合并为{len(merged_subtitles)}行)")
+            return output_path
+
+        except Exception as e:
+            logger.error(f"合并字幕行失败: {str(e)}")
+            raise
+
+    def _count_chinese_characters(self, text: str) -> int:
+        """计算文本中的中文字符数量
+
+        Args:
+            text: 待统计的文本
+
+        Returns:
+            中文字符数量
+        """
+        count = 0
+        for char in text:
+            # 判断是否为中文字符（Unicode 范围）
+            if '\u4e00' <= char <= '\u9fff':
+                count += 1
+        return count
+
+    def _write_srt_file(self, subtitles: List[Dict[str, Any]], output_path: Path) -> None:
+        """写入SRT字幕文件
+
+        Args:
+            subtitles: 字幕列表
+            output_path: 输出文件路径
+        """
+        lines = []
+        for sub in subtitles:
+            lines.append(str(sub['index']))
+            lines.append(f"{sub['start']} --> {sub['end']}")
+            lines.append(sub['text'])
+            lines.append("")  # 空行分隔
+
+        output_path.write_text("\n".join(lines), encoding="utf-8")
+
     async def translate_with_openai(
         self, subtitle_path: Path, output_path: Optional[Path] = None
     ) -> Optional[Path]:
@@ -246,6 +431,31 @@ class SubtitleProcessor:
         """
         try:
             logger.info(f"开始使用LLM翻译字幕: {subtitle_path.name}")
+
+            # 提取基础文件名（去掉语言代码，如 .en.srt -> base）
+            # 例如: "video.en.srt" -> "video"
+            original_stem = subtitle_path.stem  # 例如: "video.en"
+
+            # 去掉语言代码后缀（如 .en, .zh-Hans 等）
+            base_stem = original_stem
+            for lang_suffix in ['.en', '.eng', '.zh-Hans', '.zh-Hant', '.zh', '.zh-CN']:
+                if original_stem.lower().endswith(lang_suffix.lower()):
+                    base_stem = original_stem[:-len(lang_suffix)]
+                    break
+
+            logger.info(f"基础文件名: {base_stem}")
+
+            # 步骤1: 修复字幕时间轴重叠（生成临时文件）
+            logger.info("步骤 1/4: 修复字幕时间轴重叠...")
+            fixed_subtitle_path = self.fix_subtitle_overlaps(subtitle_path)
+
+            # 步骤2: 合并字幕行（每两行合并为一行），保留原文件
+            logger.info("步骤 2/4: 合并字幕行...")
+            merged_subtitle_path = self.merge_subtitle_lines(fixed_subtitle_path)
+
+            # 删除临时的fixed文件
+            fixed_subtitle_path.unlink()
+            logger.info(f"预处理字幕完成: {merged_subtitle_path.name}")
 
             # 检查OpenAI API密钥
             api_key = settings.openai_api_key
@@ -267,23 +477,96 @@ class SubtitleProcessor:
 
             prompt_template = prompt_path.read_text(encoding="utf-8")
 
-            # 读取原始字幕文件内容
-            subtitle_content = subtitle_path.read_text(encoding="utf-8")
+            # 解析字幕为结构化数据（使用预处理后的文件）
+            subtitles = self._parse_srt_file(merged_subtitle_path)
+            total_subtitles = len(subtitles)
+            logger.info(f"解析到 {total_subtitles} 条字幕")
 
-            # 生成输出路径
+            # 生成输出路径（统一为 zh.srt）
             if output_path is None:
-                output_path = subtitle_path.parent / f"{subtitle_path.stem}_zh.srt"
+                output_path = subtitle_path.parent / "zh.srt"
 
-            logger.info(f"正在翻译字幕，共 {len(subtitle_content)} 字符")
+            # 分批翻译
+            batch_size = 10
+            all_translated_texts = []
+
+            total_batches = (total_subtitles + batch_size - 1) // batch_size
+            logger.info(f"步骤 3/4: 正在分批翻译字幕，共 {total_subtitles} 条，分 {total_batches} 批")
 
             try:
-                # 调用OpenAI API - 一次性翻译整个字幕文件
-                translated_content = await self._call_openai_translate(
-                    prompt_template, subtitle_content, api_key, base_url, model
-                )
+                for i in range(0, total_subtitles, batch_size):
+                    batch_num = i // batch_size + 1
+                    end_idx = min(i + batch_size, total_subtitles)
+                    batch_subtitles = subtitles[i:end_idx]
 
-                # 直接保存翻译结果
-                output_path.write_text(translated_content, encoding="utf-8")
+                    logger.info(f"翻译第 {batch_num}/{total_batches} 批 ({i+1}-{end_idx} 条)...")
+
+                    # 重试机制：最多重试5次
+                    max_retries = 5
+                    translated_map = {}
+                    retry_count = 0
+                    format_valid = False
+
+                    while retry_count < max_retries:
+                        if retry_count > 0:
+                            logger.info(f"第 {batch_num} 批第 {retry_count}/{max_retries} 次重试，重新翻译整个批次...")
+
+                        # 格式化当前批次的字幕（始终翻译整个批次）
+                        batch_text = self._format_subtitles_for_translation_batch(batch_subtitles, i)
+
+                        # 调用API翻译当前批次
+                        translated_batch = await self._call_openai_translate(
+                            prompt_template, batch_text, api_key, base_url, model
+                        )
+
+                        # 解析翻译结果（返回字典和格式是否正确的标志）
+                        current_translated_map, current_format_valid = self._parse_translated_batch_result(translated_batch)
+
+                        # 如果这次返回的结果更好（数量更多）或格式正确，使用这次的结果
+                        if len(current_translated_map) > len(translated_map):
+                            translated_map = current_translated_map
+                            format_valid = current_format_valid
+
+                        retry_count += 1
+
+                        # 检查是否完整且格式正确
+                        if len(translated_map) == len(batch_subtitles) and format_valid:
+                            logger.info(f"第 {batch_num} 批翻译完整且格式正确，共 {len(translated_map)} 条")
+                            break
+                        elif retry_count < max_retries:
+                            if not format_valid:
+                                logger.warning(f"第 {batch_num} 批翻译格式不正确（部分字幕缺失中文翻译），将进行第 {retry_count + 1} 次重试")
+                            else:
+                                missing = [j + 1 for j in range(len(batch_subtitles)) if (j + 1) not in translated_map]
+                                logger.warning(f"第 {batch_num} 批翻译不完整，已翻译 {len(translated_map)}/{len(batch_subtitles)} 条，缺失序号: {missing}，将进行第 {retry_count + 1} 次重试")
+
+                    # 重试结束后仍不完整的，用原文填充
+                    if len(translated_map) < len(batch_subtitles):
+                        missing_indices = [j + 1 for j in range(len(batch_subtitles)) if (j + 1) not in translated_map]
+                        logger.error(f"第 {batch_num} 批重试 {max_retries} 次后仍缺失 {len(missing_indices)} 条，将使用原文填充: {missing_indices}")
+
+                    # 确保当前批次完整性
+                    translated_texts = self._ensure_translation_completeness(translated_map, batch_subtitles, batch_offset=i)
+                    all_translated_texts.extend(translated_texts)
+
+                    logger.info(f"第 {batch_num}/{total_batches} 批翻译完成，翻译了 {len(translated_texts)} 条")
+
+                # 最终验证翻译完整性（由于每批已经保证完整性，这里只是双重检查）
+                if len(all_translated_texts) != total_subtitles:
+                    logger.error(f"翻译数量不匹配: 原文 {total_subtitles} 条，译文 {len(all_translated_texts)} 条")
+                    # 使用全局字幕列表填充
+                    global_translated_map = {i + 1: text for i, text in enumerate(all_translated_texts)}
+                    all_translated_texts = self._ensure_translation_completeness(global_translated_map, subtitles)
+
+                # 重建 SRT 文件
+                logger.info(f"步骤 4/4: 重建字幕文件...")
+                final_content = self._rebuild_srt_from_batches(subtitles, all_translated_texts)
+
+                # 保存翻译结果
+                output_path.write_text(final_content, encoding="utf-8")
+
+                # 删除临时的预处理文件
+                merged_subtitle_path.unlink()
 
                 logger.info(f"字幕翻译完成: {output_path.name}")
                 return output_path
@@ -299,6 +582,193 @@ class SubtitleProcessor:
             import traceback
             logger.error(traceback.format_exc())
             return None
+
+    def _parse_srt_file(self, srt_path: Path) -> List[Dict[str, Any]]:
+        """解析 SRT 字幕文件为结构化数据
+
+        Returns:
+            字幕条目列表，每条包含 index, start, end, text
+        """
+        content = srt_path.read_text(encoding="utf-8")
+        entries = []
+
+        blocks = content.strip().split("\n\n")
+
+        for block in blocks:
+            lines = block.strip().split("\n")
+            if len(lines) >= 3:
+                try:
+                    index = int(lines[0].strip())
+                    time_line = lines[1].strip()
+                    text = "\n".join(lines[2:])
+
+                    time_parts = time_line.split("-->")
+                    if len(time_parts) == 2:
+                        start = time_parts[0].strip()
+                        end = time_parts[1].strip()
+
+                        entries.append({
+                            "index": index,
+                            "start": start,
+                            "end": end,
+                            "text": text
+                        })
+                except (ValueError, IndexError) as e:
+                    logger.debug(f"解析字幕块失败: {block[:50]}... 错误: {e}")
+                    continue
+
+        return entries
+
+    def _format_subtitles_for_translation_batch(self, subtitles: List[Dict[str, Any]], offset: int) -> str:
+        """格式化字幕批次用于翻译"""
+        lines = []
+        for i, sub in enumerate(subtitles):
+            seq_num = offset + i + 1
+            lines.append(f"{seq_num}: {sub['text']}")
+        return "\n".join(lines)
+
+    def _parse_translated_batch_result(self, translated_text: str) -> Tuple[Dict[int, str], bool]:
+        """解析批次翻译结果，返回 {序号: 双语文本} 的字典和格式是否正确的标志
+
+        支持多种格式：
+        1. 旧格式（纯中文）：1: 翻译文本
+        2. 双语格式（使用.或:）：1. English text
+           1. 中文翻译（带重复序号）
+           或：1: English text
+           中文翻译（不带序号）
+
+        Returns:
+            (翻译映射字典, 格式是否正确 - 所有字幕都包含双语)
+        """
+        lines = translated_text.split("\n")
+
+        translated_map = {}  # {序号: 双语文本}
+        format_valid = True  # 格式是否正确
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+
+            # 跳过空行和注释行
+            if not line or line.startswith("#") or line.startswith("Note") or line.startswith("注意"):
+                i += 1
+                continue
+
+            # 检查序号行（使用.或:作为分隔符）
+            index = None
+            first_part_text = None
+            separator = None
+
+            # 尝试.分隔符
+            if ". " in line:
+                parts = line.split(". ", 1)
+                index_str = parts[0].strip()
+                if index_str.isdigit():
+                    separator = "."
+                    index = int(index_str)
+                    first_part_text = parts[1].strip() if len(parts) > 1 else ""
+
+            # 尝试:分隔符（如果.没找到）
+            if index is None and ": " in line:
+                parts = line.split(": ", 1)
+                index_str = parts[0].strip()
+                if index_str.isdigit():
+                    separator = ":"
+                    index = int(index_str)
+                    first_part_text = parts[1].strip() if len(parts) > 1 else ""
+
+            # 如果找到了序号行
+            if index is not None and first_part_text:
+                # 查找下一行的中文翻译
+                second_part_text = ""
+                if i + 1 < len(lines):
+                    next_line = lines[i + 1].strip()
+
+                    # 检查下一行是否是相同序号的中文翻译（带序号）
+                    if separator and f"{separator} " in next_line:
+                        next_parts = next_line.split(f"{separator} ", 1)
+                        next_index_str = next_parts[0].strip()
+                        if next_index_str.isdigit() and int(next_index_str) == index:
+                            second_part_text = next_parts[1].strip() if len(next_parts) > 1 else ""
+
+                    # 如果下一行不是带序号的中文，检查是否是不带序号的中文
+                    if not second_part_text and next_line:
+                        # 判断是否是另一个序号行
+                        is_next_index_line = False
+                        if ". " in next_line:
+                            potential_index = next_line.split(". ", 1)[0].strip()
+                            is_next_index_line = potential_index.isdigit()
+                        elif ": " in next_line:
+                            potential_index = next_line.split(": ", 1)[0].strip()
+                            is_next_index_line = potential_index.isdigit()
+
+                        # 如果不是下一个序号行，且不是注释，则认为是中文翻译
+                        if not is_next_index_line and not next_line.startswith("#"):
+                            second_part_text = next_line
+
+                    # 根据是否有第二行决定跳过的行数
+                    if second_part_text:
+                        i += 2  # 跳过两行
+                    else:
+                        i += 1
+                else:
+                    i += 1
+
+                # 构建结果文本
+                if second_part_text:
+                    # 有第二行，组合成双语
+                    translated_map[index] = f"{first_part_text}\n{second_part_text}"
+                else:
+                    # 没有第二行，标记格式可能不正确
+                    format_valid = False
+                    translated_map[index] = first_part_text
+            else:
+                i += 1
+
+        return translated_map, format_valid
+
+    def _ensure_translation_completeness(self, translated_map: Dict[int, str], batch_subtitles: List[Dict[str, Any]], batch_offset: int = 0) -> List[str]:
+        """确保翻译完整性，返回按序号排序的翻译文本列表
+
+        Args:
+            translated_map: 翻译映射字典 {全局序号: 翻译文本}
+            batch_subtitles: 当前批次的字幕列表
+            batch_offset: 当前批次在整个字幕中的偏移量（用于计算全局序号）
+
+        Returns:
+            按序号排序的翻译文本列表，缺失的用原文填充
+        """
+        translated_texts = []
+        for i, sub in enumerate(batch_subtitles):
+            # 计算全局序号
+            global_seq_num = batch_offset + i + 1
+            if global_seq_num in translated_map:
+                translated_texts.append(translated_map[global_seq_num])
+            else:
+                logger.warning(f"翻译缺失第 {global_seq_num} 条，使用原文填充")
+                translated_texts.append(sub["text"])
+
+        return translated_texts
+
+    def _rebuild_srt_from_batches(self, subtitles: List[Dict[str, Any]], translated_texts: List[str]) -> str:
+        """从翻译结果重建 SRT 文件
+
+        支持双语格式：translated_texts 中的每个元素可以包含换行符分隔的英中双语文本
+        """
+        lines = []
+
+        for i, sub in enumerate(subtitles):
+            if i >= len(translated_texts):
+                logger.warning(f"翻译文本不足，第 {i+1} 条使用原文")
+                translated_text = sub["text"]
+            else:
+                translated_text = translated_texts[i]
+
+            lines.append(str(sub["index"]))
+            lines.append(f"{sub['start']} --> {sub['end']}")
+            lines.append(translated_text)
+            lines.append("")
+
+        return "\n".join(lines)
 
     def _format_subtitles_for_translation(self, subtitles: List[Dict[str, Any]]) -> str:
         """格式化字幕用于翻译"""
@@ -330,11 +800,16 @@ class SubtitleProcessor:
                     {"role": "user", "content": subtitle_text}
                 ],
                 temperature=0.3,
-                max_tokens=16384,  # 增加token限制以支持完整字幕文件
+                max_tokens=8192,  # 增加token限制以支持完整字幕文件
             )
+            logger.info(response)
 
             # 获取翻译结果
             translated_text = response.choices[0].message.content.strip()
+
+            # 记录模型原始输出（用于调试）
+            logger.debug(f"[模型原始输出]\n{translated_text}\n[/模型原始输出]")
+
             return translated_text
 
         except ImportError:
@@ -395,16 +870,149 @@ class SubtitleProcessor:
         for i, sub in enumerate(original_subtitles):
             if i < len(translated_texts):
                 lines.append(f"{sub['index']}")
-                lines.append(f"{sub['start_time']} --> {sub['end_time']}")
+                lines.append(f"{sub['start']} --> {sub['end']}")
                 lines.append(translated_texts[i])
             else:
                 # 翻译数量不足时使用原文
                 lines.append(f"{sub['index']}")
-                lines.append(f"{sub['start_time']} --> {sub['end_time']}")
+                lines.append(f"{sub['start']} --> {sub['end']}")
                 lines.append(sub['text'])
             lines.append("")  # 空行分隔
 
         return "\n".join(lines)
+
+    def extract_plain_text_from_srt(self, srt_path: Path) -> str:
+        """从SRT字幕文件中提取纯文本（去除时间轴和序号）
+
+        Args:
+            srt_path: SRT字幕文件路径
+
+        Returns:
+            提取的纯文本
+        """
+        try:
+            subtitles = self._parse_srt_file(srt_path)
+
+            # 提取所有字幕文本并连接
+            text_lines = []
+            for sub in subtitles:
+                text_lines.append(sub['text'])
+
+            # 用空格连接所有文本
+            plain_text = " ".join(text_lines)
+
+            logger.info(f"从字幕文件提取纯文本: {len(plain_text)} 字符")
+            return plain_text
+
+        except Exception as e:
+            logger.error(f"提取纯文本失败: {str(e)}")
+            raise
+
+    async def generate_video_description(self, subtitle_text: str, video_url: str, output_path: Optional[Path] = None, subtitle_folder: Optional[Path] = None) -> Path:
+        """使用LLM生成视频简介
+
+        Args:
+            subtitle_text: 字幕纯文本内容
+            video_url: 视频的YouTube原始链接
+            output_path: 输出文件路径，如果为None则自动生成
+            subtitle_folder: 字幕文件所在文件夹，用于生成默认输出路径
+
+        Returns:
+            生成的视频简介文件路径
+        """
+        try:
+            # 检查OpenAI API密钥
+            api_key = settings.openai_api_key
+            if not api_key:
+                logger.error("未设置OPENAI_API_KEY环境变量")
+                raise ValueError("OPENAI_API_KEY未设置")
+
+            # 获取base_url和model
+            base_url = settings.openai_base_url
+            model = settings.openai_model
+
+            # 读取prompt模板
+            prompt_path = self.prompts_dir / "description.md"
+            if not prompt_path.exists():
+                logger.error(f"Prompt文件不存在: {prompt_path}")
+                raise FileNotFoundError(f"Prompt文件不存在: {prompt_path}")
+
+            prompt_template = prompt_path.read_text(encoding="utf-8")
+
+            logger.info("正在调用LLM生成视频简介...")
+
+            # 调用LLM生成简介
+            import openai
+
+            client_kwargs = {"api_key": api_key}
+            if base_url:
+                client_kwargs["base_url"] = base_url
+
+            client = openai.AsyncOpenAI(**client_kwargs)
+
+            response = await client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": prompt_template},
+                    {"role": "user", "content": subtitle_text}
+                ],
+                temperature=0.7,
+                max_tokens=2000,
+            )
+
+            # 获取生成的简介
+            description = response.choices[0].message.content.strip()
+
+            # 在开头添加YouTube原始链接
+            final_description = f"{video_url}\n\n{description}"
+
+            # 生成输出路径
+            if output_path is None:
+                # 优先使用字幕所在文件夹，否则使用默认路径
+                if subtitle_folder is not None:
+                    output_path = subtitle_folder / "video_description.txt"
+                else:
+                    output_path = Path("data") / "video_description.txt"
+
+            # 保存简介文件
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(final_description, encoding="utf-8")
+
+            logger.info(f"视频简介已生成: {output_path.name}")
+            return output_path
+
+        except Exception as e:
+            logger.error(f"生成视频简介失败: {str(e)}")
+            raise
+
+    async def generate_description_from_subtitle(self, subtitle_path: Path, video_url: str, output_path: Optional[Path] = None) -> Path:
+        """从字幕文件生成视频简介的便捷方法
+
+        Args:
+            subtitle_path: 中文字幕文件路径
+            video_url: 视频的YouTube原始链接
+            output_path: 输出文件路径，如果为None则自动生成
+
+        Returns:
+            生成的视频简介文件路径
+        """
+        try:
+            logger.info(f"从字幕文件生成视频简介: {subtitle_path.name}")
+
+            # 从字幕提取纯文本
+            plain_text = self.extract_plain_text_from_srt(subtitle_path)
+
+            # 生成视频简介（传入字幕文件夹以便保存到正确位置）
+            description_path = await self.generate_video_description(
+                plain_text, video_url, output_path, subtitle_folder=subtitle_path.parent
+            )
+
+            logger.info(f"视频简介生成完成")
+            return description_path
+
+        except Exception as e:
+            logger.error(f"从字幕生成视频简介失败: {str(e)}")
+            raise
 
     def merge_bilingual_srt(self, original_srt_path: Path, translated_srt_path: Path, output_path: Optional[Path] = None) -> Path:
         """合并中英双语字幕文件
@@ -433,8 +1041,8 @@ class SubtitleProcessor:
             merged_lines = []
             for orig_sub in original_subs:
                 index = orig_sub['index']
-                start_time = orig_sub['start_time']
-                end_time = orig_sub['end_time']
+                start_time = orig_sub['start']
+                end_time = orig_sub['end']
                 original_text = orig_sub['text']
 
                 # 查找对应的翻译
@@ -461,48 +1069,6 @@ class SubtitleProcessor:
             logger.error(f"合并双语字幕失败: {str(e)}")
             raise
 
-    def _parse_srt_file(self, srt_path: Path) -> List[Dict[str, Any]]:
-        """解析SRT字幕文件
-
-        Args:
-            srt_path: SRT文件路径
-
-        Returns:
-            字幕条目列表，每个条目包含 index, start_time, end_time, text
-        """
-        subtitles = []
-        content = srt_path.read_text(encoding="utf-8")
-
-        # 按空行分割字幕块
-        blocks = re.split(r'\n\s*\n', content.strip())
-
-        for block in blocks:
-            lines = block.strip().split('\n')
-            if len(lines) >= 3:
-                try:
-                    index = int(lines[0].strip())
-                    time_line = lines[1].strip()
-                    text_lines = lines[2:]
-
-                    # 解析时间轴
-                    time_match = re.match(r'(\d{2}:\d{2}:\d{2},\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2},\d{3})', time_line)
-                    if time_match:
-                        start_time = time_match.group(1)
-                        end_time = time_match.group(2)
-                        text = '\n'.join(text_lines)
-
-                        subtitles.append({
-                            'index': index,
-                            'start_time': start_time,
-                            'end_time': end_time,
-                            'text': text
-                        })
-                except (ValueError, IndexError) as e:
-                    logger.debug(f"跳过无法解析的字幕块: {block[:50]}...")
-                    continue
-
-        return subtitles
-
     def convert_srt_to_ass(self, srt_path: Path, output_path: Optional[Path] = None, en_font_size: int = 16, zh_font_size: int = 20) -> Path:
         """将双语SRT字幕转换为ASS格式，支持中英文字号不同
 
@@ -516,24 +1082,25 @@ class SubtitleProcessor:
             ASS字幕文件路径
         """
         try:
-            # 生成输出路径
+            # 生成输出路径（统一为 zh.ass）
             if output_path is None:
-                output_path = srt_path.parent / f"{srt_path.stem}.ass"
+                output_path = srt_path.parent / "zh.ass"
 
             logger.info(f"正在转换SRT到ASS: {srt_path.name}")
 
             # ASS文件头
-            ass_header = """[Script Info]
+            ass_header = f"""[Script Info]
 Title: Bilingual Subtitles
 ScriptType: v4.00+
 WrapStyle: 0
-PlayResX: 1280
-PlayResY: 720
+PlayResX: 1920
+PlayResY: 1080
 ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial,16,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,2,10,10,10,1
+Style: English,Arial,{en_font_size},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,2,10,10,0,1
+Style: Chinese,VYuan_Round,{zh_font_size},&H00FFFFFF,&H000000FF,&H00503129,&H00000000,0,0,0,0,100,100,0,0,1,1,0,2,10,10,{en_font_size+4},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -546,8 +1113,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             ass_lines = []
             for sub in subtitles:
                 # 转换时间格式: 00:00:00,000 -> 0:00:00.00
-                start_time = self._srt_time_to_ass_time(sub['start_time'])
-                end_time = self._srt_time_to_ass_time(sub['end_time'])
+                start_time = self._srt_time_to_ass_time(sub['start'])
+                end_time = self._srt_time_to_ass_time(sub['end'])
 
                 # 处理字幕文本（支持双语）
                 text_lines = sub['text'].split('\n')
@@ -561,23 +1128,23 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     has_chinese = any('\u4e00' <= char <= '\u9fff' for char in line)
 
                     if has_chinese:
-                        # 中文字幕使用较大字号
-                        chinese_lines.append(f"{{\\fs{zh_font_size}}}{line}")
+                        # 中文字幕使用 Chinese 样式（圆体、白字蓝色描边）
+                        chinese_lines.append(line)
                     else:
-                        # 英文字幕使用较小字号
-                        english_lines.append(f"{{\\fs{en_font_size}}}{line}")
+                        # 英文字幕使用 English 样式
+                        english_lines.append(line)
 
-                # 构建ASS格式的文本：中文在上，英文在下
-                ass_text_parts = []
-                if chinese_lines:
-                    ass_text_parts.extend(chinese_lines)
+                # 先输出英文（Layer=0, MarginV=50），再输出中文（Layer=1, MarginV=90）
+                # 这样中文会显示在上方，英文在下方
                 if english_lines:
-                    ass_text_parts.extend(english_lines)
+                    # 合并所有英文行
+                    en_text = "\\N".join(english_lines)
+                    ass_lines.append(f"Dialogue: 0,{start_time},{end_time},English,,0,0,0,,{en_text}")
 
-                # 合并多行，使用\\N换行
-                ass_text = "\\N".join(ass_text_parts)
-
-                ass_lines.append(f"Dialogue: 0,{start_time},{end_time},Default,,0,0,0,,{ass_text}")
+                if chinese_lines:
+                    # 合并所有中文行
+                    zh_text = "\\N".join(chinese_lines)
+                    ass_lines.append(f"Dialogue: 1,{start_time},{end_time},Chinese,,0,0,0,,{zh_text}")
 
             # 写入ASS文件
             ass_content = ass_header + "\n".join(ass_lines)
@@ -624,16 +1191,20 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             嵌入字幕后的视频文件路径
         """
         try:
-            # 生成输出路径
+            # 生成输出路径（移除 _original 后缀，得到最终视频名 {title}.mp4）
             if output_path is None:
-                output_path = video_path.parent / f"{video_path.stem}_embedded{video_path.suffix}"
+                # 如果视频名是 {title}_original.mp4，去掉 _original
+                stem = video_path.stem
+                if stem.endswith("_original"):
+                    stem = stem[:-9]  # 去掉 "_original"
+                output_path = video_path.parent / f"{stem}.mp4"
 
-            logger.info(f"正在将字幕嵌入视频: {video_path.name} + {subtitle_path.name}")
+            logger.info(f"正在将字幕嵌入视频: {video_path.name} + {subtitle_path.name} -> {output_path.name}")
 
             # 如果是SRT格式，转换为ASS格式以支持不同字号
             if subtitle_path.suffix.lower() == '.srt':
                 logger.info("检测到SRT格式字幕，转换为ASS格式以支持双语字号")
-                subtitle_path = self.convert_srt_to_ass(subtitle_path, en_font_size=13, zh_font_size=17)
+                subtitle_path = self.convert_srt_to_ass(subtitle_path, en_font_size=32, zh_font_size=48)
 
             # 使用FFmpeg嵌入字幕（ASS格式）
             # 需要转义路径中的特殊字符

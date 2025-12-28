@@ -157,7 +157,7 @@ class BilibiliUploader:
 
             # 如果没有提供封面，创建一个简单的临时封面
             if video.cover_path and Path(video.cover_path).exists():
-                cover = Picture().from_file(Path(video.cover_path))
+                cover = Picture().from_file(str(Path(video.cover_path)))
             else:
                 # 创建一个临时封面图片（1x1像素的PNG）
                 import tempfile

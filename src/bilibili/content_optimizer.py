@@ -1,6 +1,7 @@
 """B站内容优化模块"""
 
 import re
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
@@ -93,11 +94,28 @@ class BilibiliContentOptimizer:
         try:
             logger.info(f"开始优化视频内容: {youtube_video.title}")
 
+            # 获取视频文件夹路径
+            video_path_obj = Path(video_path)
+            video_folder = video_path_obj.parent
+
+            # 查找封面图
+            cover_path = self._find_cover_image(video_folder, video_path_obj.stem)
+            if cover_path:
+                logger.info(f"找到封面图: {cover_path.name}")
+            else:
+                logger.info("未找到封面图")
+
+            # 查找并读取生成的视频简介
+            description = self._load_video_description(video_folder)
+            if description:
+                logger.info("使用生成的视频简介")
+            else:
+                # 如果没有找到简介文件，使用默认优化描述
+                description = self.optimize_description(youtube_video)
+                logger.info("使用默认描述")
+
             # 优化标题
             optimized_title = self.optimize_title(youtube_video.title)
-
-            # 优化描述
-            optimized_description = self.optimize_description(youtube_video)
 
             # 生成标签
             optimized_tags = self.generate_tags(youtube_video)
@@ -108,9 +126,10 @@ class BilibiliContentOptimizer:
             # 创建B站视频对象
             bilibili_video = BilibiliVideo(
                 title=optimized_title,
-                description=optimized_description,
+                description=description,
                 tags=optimized_tags,
                 category_id=category_id,
+                cover_path=str(cover_path) if cover_path else None,
                 video_path=video_path,
                 copyright=2,  # 转载
                 source=f"来源：YouTube - {youtube_video.channel_title}",
@@ -131,6 +150,66 @@ class BilibiliContentOptimizer:
                 copyright=2,
                 source=f"来源：YouTube - {youtube_video.channel_title}",
             )
+
+    def _find_cover_image(self, video_folder: Path, video_stem: str) -> Optional[Path]:
+        """查找视频封面图（优先使用cover.jpg）
+
+        Args:
+            video_folder: 视频所在文件夹
+            video_stem: 视频文件名（不含扩展名）
+
+        Returns:
+            找到的封面图路径，未找到返回None
+        """
+        try:
+            # 优先查找 cover.jpg（标准命名）
+            cover_jpg = video_folder / "cover.jpg"
+            if cover_jpg.exists():
+                return cover_jpg
+
+            # 兼容旧格式：查找与视频同名的封面图
+            cover_extensions = [".jpg", ".jpeg", ".png", ".webp"]
+
+            for ext in cover_extensions:
+                cover_file = video_folder / f"{video_stem}{ext}"
+                if cover_file.exists():
+                    return cover_file
+
+            # 如果没找到，查找文件夹中任何图片文件
+            for ext in cover_extensions:
+                matches = list(video_folder.glob(f"*{ext}"))
+                if matches:
+                    # 按文件名排序，返回第一个
+                    matches.sort(key=lambda x: x.name)
+                    return matches[0]
+
+            return None
+
+        except Exception as e:
+            logger.debug(f"查找封面图失败: {str(e)}")
+            return None
+
+    def _load_video_description(self, video_folder: Path) -> Optional[str]:
+        """加载生成的视频简介文件
+
+        Args:
+            video_folder: 视频所在文件夹
+
+        Returns:
+            视频简介内容，未找到返回None
+        """
+        try:
+            description_file = video_folder / "video_description.txt"
+            if description_file.exists():
+                content = description_file.read_text(encoding="utf-8")
+                logger.info(f"读取视频简介文件: {description_file.name}")
+                return content.strip()
+
+            return None
+
+        except Exception as e:
+            logger.debug(f"读取视频简介文件失败: {str(e)}")
+            return None
 
     def optimize_title(self, original_title: str) -> str:
         """优化标题"""
@@ -158,7 +237,7 @@ class BilibiliContentOptimizer:
 
             # 添加一些B站友好的元素
             if not any(symbol in title for symbol in ["【", "「", "『"]):
-                title = f"【教程】{title}"
+                title = f"{title}"
 
             return title
 
@@ -308,18 +387,6 @@ class BilibiliContentOptimizer:
     def generate_dynamic_content(self, youtube_video: YouTubeVideo) -> str:
         """生成动态内容"""
         try:
-            return f"""
-🔥 分享一个超赞的技术视频！
-
-{youtube_video.title[:50]}...
-
-📺 来自 {youtube_video.channel_title}
-⏱️ 时长约 {youtube_video.duration or "未知"}
-👀 {youtube_video.view_count:,} 观看
-
-✨ 学习了新知识，和大家一起分享！
-
-#编程 #教程 #技术分享
-            """.strip()
+            return ""
         except Exception:
             return "分享了一个有趣的技术视频，一起学习进步！"

@@ -38,6 +38,29 @@ class YouTubeVideo:
         """获取短URL"""
         return f"https://youtu.be/{self.video_id}"
 
+    @property
+    def folder_name(self) -> str:
+        """获取视频文件夹名称 (格式: {作者名}_{视频ID})"""
+        # 清理作者名中的非法字符
+        safe_author = self._sanitize_for_folder(self.channel_title)
+        return f"{safe_author}_{self.video_id}"
+
+    def _sanitize_for_folder(self, name: str) -> str:
+        """清理文件夹名称，移除非法字符"""
+        # 移除或替换非法字符（文件夹名中不能有 / \\ : * ? " < > |）
+        illegal_chars = '/\\:*?"<>|'
+        for char in illegal_chars:
+            name = name.replace(char, "_")
+
+        # 限制长度
+        if len(name) > 50:
+            name = name[:50]
+
+        # 移除首尾空格和点
+        name = name.strip(". ")
+
+        return name or "Unknown"
+
     def is_computer_science_related(self) -> bool:
         """判断是否与计算机科学相关"""
         cs_keywords = [

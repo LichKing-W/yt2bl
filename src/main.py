@@ -173,7 +173,7 @@ class YouTubeToBilibili:
 
                                 # 翻译字幕（如果启用）
                                 if self.translate_subs:
-                                    await self.translate_video_subtitles(downloaded_path)
+                                    await self.translate_video_subtitles(downloaded_path, video.url)
                             else:
                                 self.console.print(
                                     f"❌ 下载失败: {video.title}", style="red"
@@ -201,7 +201,7 @@ class YouTubeToBilibili:
 
                             # 翻译字幕（如果启用）
                             if self.translate_subs:
-                                await self.translate_video_subtitles(downloaded_path)
+                                await self.translate_video_subtitles(downloaded_path, video.url)
                         else:
                             print(f"❌ 下载失败: {video.title}")
 
@@ -502,7 +502,7 @@ class YouTubeToBilibili:
 
                             # 翻译字幕（如果启用）
                             if self.translate_subs:
-                                await self.translate_video_subtitles(downloaded_path)
+                                await self.translate_video_subtitles(downloaded_path, video.url)
                         else:
                             self.console.print(
                                 f"❌ 下载失败: {video.title}", style="red"
@@ -530,7 +530,7 @@ class YouTubeToBilibili:
 
                         # 翻译字幕（如果启用）
                         if self.translate_subs:
-                            await self.translate_video_subtitles(downloaded_path)
+                            await self.translate_video_subtitles(downloaded_path, video.url)
                     else:
                         print(f"❌ 下载失败: {video.title}")
 
@@ -618,11 +618,12 @@ class YouTubeToBilibili:
             logger.error(f"批量上传失败: {str(e)}\n{traceback.format_exc()}")
             return upload_results
 
-    async def translate_video_subtitles(self, video_path: Path) -> Optional[Path]:
+    async def translate_video_subtitles(self, video_path: Path, video_url: Optional[str] = None) -> Optional[Path]:
         """翻译视频的字幕
 
         Args:
             video_path: 视频文件路径
+            video_url: 视频的YouTube原始链接（用于生成简介）
 
         Returns:
             翻译后的字幕文件路径，如果没有字幕或翻译失败则返回None
@@ -634,11 +635,30 @@ class YouTubeToBilibili:
             parent_dir = video_path.parent
 
             subtitle_path = None
+
+            # 首先尝试查找带语言代码的字幕文件（如 .en.srt, .zh-Hans.srt）
+            # yt-dlp 下载的字幕文件通常包含语言代码
             for ext in subtitle_extensions:
-                sub_file = parent_dir / f"{base_name}{ext}"
-                if sub_file.exists():
-                    subtitle_path = sub_file
+                # 查找所有匹配的字幕文件
+                matches = list(parent_dir.glob(f"{base_name}.*{ext}"))
+                if matches:
+                    # 优先选择英文字幕
+                    for match in matches:
+                        if '.en.' in match.name or '.eng.' in match.name:
+                            subtitle_path = match
+                            break
+                    # 如果没找到英文字幕，使用第一个
+                    if not subtitle_path:
+                        subtitle_path = matches[0]
                     break
+
+            # 如果没找到带语言代码的，尝试不带语言代码的
+            if not subtitle_path:
+                for ext in subtitle_extensions:
+                    sub_file = parent_dir / f"{base_name}{ext}"
+                    if sub_file.exists():
+                        subtitle_path = sub_file
+                        break
 
             if not subtitle_path:
                 logger.info(f"未找到字幕文件: {video_path.name}")
@@ -663,6 +683,18 @@ class YouTubeToBilibili:
 
             if result:
                 self.console.print(f"✅ 字幕翻译完成: {result.name}", style="green")
+
+                # 如果提供了视频URL，生成视频简介
+                if video_url:
+                    try:
+                        self.console.print(f"📝 正在生成视频简介...", style="blue")
+                        description_path = await self.subtitle_processor.generate_description_from_subtitle(
+                            result, video_url
+                        )
+                        self.console.print(f"✅ 视频简介已生成: {description_path.name}", style="green")
+                    except Exception as e:
+                        logger.warning(f"生成视频简介失败: {str(e)}")
+                        self.console.print(f"⚠️ 视频简介生成失败: {str(e)}", style="yellow")
 
                 # 如果启用了字幕嵌入，则嵌入双语字幕
                 if self.embed_subs:
@@ -710,45 +742,108 @@ class YouTubeToBilibili:
                 return None
 
         except Exception as e:
-            logger.error(f"翻译字幕文件异常: {str(e)}")
-            self.console.print(f"❌ 翻译异常: {str(e)}", style="red")
+            self.console.print(f"❌ 翻译过程出错: {str(e)}", style="red")
             return None
+
+    async def check_bilibili_auth(self) -> None:
+        """检查B站认证状态"""
+        try:
+            from rich.panel import Panel
+            from rich.table import Table
+            from src.utils.config import settings
+
+            self.console.print("\n🔍 检查B站认证状态...", style="bold blue")
+
+            table = Table(title="B站配置检查", show_header=True, header_style="bold magenta")
+            table.add_column("配置项", style="cyan")
+            table.add_column("状态", style="green")
+            table.add_column("值", style="dim")
+
+            # 检查必要的配置
+            sessdata = settings.bilibili_sessdata
+            bili_jct = settings.bilibili_bili_jct
+            dedeuserid = settings.bilibili_dedeuser_id
+
+            for key, value in [
+                ("SESSDATA", sessdata),
+                ("bili_jct", bili_jct),
+                ("DedeUserID", dedeuserid),
+            ]:
+                if value:
+                    # 隐藏敏感信息的中间部分
+                    masked = value[:4] + "*" * (len(value) - 8) + value[-4:] if len(value) > 8 else "****"
+                    table.add_row(key, "✅ 已配置", masked)
+                else:
+                    table.add_row(key, "❌ 未配置", "-")
+
+            self.console.print(table)
+
+            # 如果没有uploader，临时创建一个
+            if self.uploader is None:
+                self.uploader = BilibiliUploader()
+
+            # 尝试获取用户信息
+            self.console.print("\n🔄 正在验证认证...", style="yellow")
+            user_info = await self.uploader.get_user_info()
+
+            if user_info:
+                self.console.print(Panel(
+                    f"[bold green]✅ 认证成功！[/bold green]\n\n"
+                    f"用户名: [cyan]{user_info.get('name', 'N/A')}[/cyan]\n"
+                    f"用户ID: [cyan]{user_info.get('mid', 'N/A')}[/cyan]\n"
+                    f"等级: [cyan]{user_info.get('level', 'N/A')}[/cyan]\n"
+                    f"性别: [cyan]{user_info.get('sex', 'N/A')}[/cyan]\n",
+                    title="🎉 B站认证有效",
+                    border_style="green"
+                ))
+            else:
+                self.console.print(Panel(
+                    "[bold red]❌ 认证失败[/bold red]\n\n"
+                    "可能的原因：\n"
+                    "1. Cookie已过期（通常有效期1个月）\n"
+                    "2. Cookie格式不正确\n"
+                    "3. 网络连接问题\n\n"
+                    "[yellow]解决方案：[/yellow]\n"
+                    "1. 登录B站网页版 https://www.bilibili.com\n"
+                    "2. 打开浏览器开发者工具 (F12)\n"
+                    "3. 刷新页面，在Network标签找到任意请求\n"
+                    "4. 在Headers的Cookie中找到并复制以下值：\n"
+                    "   - SESSDATA\n"
+                    "   - bili_jct\n"
+                    "   - DedeUserID\n"
+                    "5. 更新到 .env 文件中",
+                    title="⚠️ 认证失败",
+                    border_style="red"
+                ))
+
+        except Exception as e:
+            self.console.print(f"❌ 检查过程出错: {str(e)}", style="red")
+            import traceback
+            self.console.print(traceback.format_exc(), style="dim")
 
     async def embed_bilingual_subtitles(self, video_path: Path, translated_subtitle_path: Optional[Path] = None) -> Optional[Path]:
         """将双语字幕嵌入到视频中
 
         Args:
             video_path: 视频文件路径
-            translated_subtitle_path: 翻译后的字幕文件路径，如果为None则自动查找
+            translated_subtitle_path: 翻译后的双语字幕文件路径，如果为None则自动查找
 
         Returns:
             嵌入字幕后的视频文件路径，如果失败则返回None
         """
         try:
-            # 查找原始字幕
             base_name = video_path.stem
             parent_dir = video_path.parent
-            original_subtitle_path = parent_dir / f"{base_name}.srt"
 
-            if not original_subtitle_path.exists():
-                self.console.print(f"⚠️ 未找到原始字幕文件: {original_subtitle_path.name}", style="yellow")
-                return None
-
-            # 如果未提供翻译字幕路径，尝试查找
+            # 如果未提供翻译字幕路径，尝试查找双语字幕
             if translated_subtitle_path is None:
                 translated_subtitle_path = parent_dir / f"{base_name}_zh.srt"
 
             if not translated_subtitle_path.exists():
-                self.console.print(f"⚠️ 未找到翻译字幕文件: {translated_subtitle_path.name}", style="yellow")
+                self.console.print(f"⚠️ 未找到双语字幕文件: {translated_subtitle_path.name}", style="yellow")
                 return None
 
-            self.console.print(f"📝 正在合并双语字幕...", style="blue")
-
-            # 合并双语字幕
-            bilingual_subtitle_path = self.subtitle_processor.merge_bilingual_srt(
-                original_subtitle_path, translated_subtitle_path
-            )
-            self.console.print(f"✅ 双语字幕合并完成: {bilingual_subtitle_path.name}", style="green")
+            self.console.print(f"📝 使用双语字幕: {translated_subtitle_path.name}", style="blue")
 
             # 检查是否已有嵌入字幕的视频
             embedded_video_path = parent_dir / f"{base_name}_embedded{video_path.suffix}"
@@ -756,11 +851,11 @@ class YouTubeToBilibili:
                 self.console.print(f"✅ 嵌入字幕的视频已存在: {embedded_video_path.name}", style="green")
                 return embedded_video_path
 
-            self.console.print(f"🎬 正在将字幕嵌入视频...", style="blue")
+            self.console.print(f"🎬 正在将双语字幕嵌入视频...", style="blue")
 
-            # 嵌入字幕到视频
+            # 直接嵌入双语字幕到视频
             result_path = await self.subtitle_processor.embed_subtitles_to_video(
-                video_path, bilingual_subtitle_path
+                video_path, translated_subtitle_path
             )
 
             self.console.print(f"✅ 字幕嵌入完成: {result_path.name}", style="green")
@@ -771,13 +866,12 @@ class YouTubeToBilibili:
             self.console.print(f"❌ 嵌入字幕异常: {str(e)}", style="red")
             return None
 
-    async def embed_bilingual_subtitles_standalone(self, video_path: Path, en_subs_path: Path, zh_subs_path: Path) -> None:
+    async def embed_bilingual_subtitles_standalone(self, video_path: Path, bilingual_subs_path: Path) -> None:
         """独立的双语字幕嵌入功能
 
         Args:
             video_path: 视频文件路径
-            en_subs_path: 英文字幕文件路径
-            zh_subs_path: 中文字幕文件路径
+            bilingual_subs_path: 双语字幕文件路径（已经包含英文和中文）
         """
         try:
             self.console.print("🚀 双语字幕嵌入工具", style="bold green")
@@ -788,46 +882,29 @@ class YouTubeToBilibili:
                 self.console.print(f"❌ 视频文件不存在: {video_path}", style="red")
                 return
 
-            if not en_subs_path.exists():
-                self.console.print(f"❌ 英文字幕文件不存在: {en_subs_path}", style="red")
-                return
-
-            if not zh_subs_path.exists():
-                self.console.print(f"❌ 中文字幕文件不存在: {zh_subs_path}", style="red")
+            if not bilingual_subs_path.exists():
+                self.console.print(f"❌ 双语字幕文件不存在: {bilingual_subs_path}", style="red")
                 return
 
             self.console.print(f"📹 视频: {video_path.name}", style="blue")
-            self.console.print(f"📝 英文字幕: {en_subs_path.name}", style="blue")
-            self.console.print(f"📝 中文字幕: {zh_subs_path.name}", style="blue")
+            self.console.print(f"📝 双语字幕: {bilingual_subs_path.name}", style="blue")
 
-            # 步骤1: 合并双语字幕
-            self.console.print(f"\n📝 步骤 1/2: 合并双语字幕...", style="bold blue")
-
-            bilingual_subtitle_path = self.subtitle_processor.merge_bilingual_srt(
-                en_subs_path, zh_subs_path
-            )
-
-            self.console.print(f"✅ 双语字幕已生成: {bilingual_subtitle_path}", style="green")
-
-            # 步骤2: 嵌入字幕到视频
-            self.console.print(f"\n🎬 步骤 2/2: 嵌入字幕到视频...", style="bold blue")
+            # 嵌入字幕到视频
+            self.console.print(f"\n🎬 正在将双语字幕嵌入视频...", style="bold blue")
 
             embedded_video_path = await self.subtitle_processor.embed_subtitles_to_video(
-                video_path, bilingual_subtitle_path
+                video_path, bilingual_subs_path
             )
 
             self.console.print(f"✅ 嵌入字幕视频已生成: {embedded_video_path}", style="green")
 
             # 显示输出摘要
             self.console.print(f"\n📊 输出文件:", style="bold green")
-            self.console.print(f"  1. 双语字幕: {bilingual_subtitle_path}")
-            self.console.print(f"  2. 嵌入字幕视频: {embedded_video_path}")
+            self.console.print(f"  双语字幕视频: {embedded_video_path}")
 
             # 显示文件大小
-            bilingual_size = bilingual_subtitle_path.stat().st_size / 1024  # KB
             video_size = embedded_video_path.stat().st_size / (1024 * 1024)  # MB
             self.console.print(f"\n📁 文件大小:")
-            self.console.print(f"  - 双语字幕: {bilingual_size:.1f} KB")
             self.console.print(f"  - 嵌入字幕视频: {video_size:.1f} MB")
 
             self.console.print(f"\n🎊 处理完成！", style="bold green")
@@ -1014,7 +1091,7 @@ class YouTubeToBilibili:
 
                     # 翻译字幕（如果启用）
                     if self.translate_subs:
-                        await self.translate_video_subtitles(local_video.filepath)
+                        await self.translate_video_subtitles(local_video.filepath, youtube_video.url)
 
                     # 优化内容为B站格式
                     bilibili_video = self.content_optimizer.optimize_for_bilibili(
@@ -1266,6 +1343,349 @@ class YouTubeToBilibili:
             self.console.print(f"❌ 程序执行异常: {str(e)}", style="red")
             logger.error(f"程序执行异常: {str(e)}")
 
+    async def run_full_workflow(self, youtube_url: str) -> None:
+        """运行完整的端到端工作流
+
+        Args:
+            youtube_url: YouTube视频链接
+        """
+        try:
+            self.console.print(
+                "🚀 YouTube 到 Bilibili 完整工作流", style="bold green"
+            )
+            self.console.print("=" * 50, style="green")
+
+            # 检查配置
+            if not self._check_config():
+                return
+
+            # 检查是否启用上传
+            if not self.enable_upload:
+                self.console.print("❌ 上传功能未启用，请使用 --upload 参数", style="red")
+                return
+
+            # 步骤 1: 获取视频信息并下载
+            self.console.print(f"\n📥 步骤 1/5: 获取视频信息并下载", style="bold blue")
+            video = await self.downloader.get_video_info(youtube_url)
+            if not video:
+                self.console.print(f"❌ 无法获取视频信息: {youtube_url}", style="red")
+                return
+
+            self.console.print(f"✅ 视频信息获取成功: {video.title}")
+
+            # 下载视频
+            downloaded_path = await self.downloader.download_video(video)
+            if not downloaded_path:
+                self.console.print(f"❌ 视频下载失败: {video.title}", style="red")
+                return
+
+            video.downloaded_path = str(downloaded_path)
+            self.console.print(f"✅ 视频下载完成: {downloaded_path.name}")
+
+            # 步骤 2: 翻译字幕
+            self.console.print(f"\n🌐 步骤 2/5: 翻译字幕", style="bold blue")
+            translated_subtitle_path = await self.translate_video_subtitles(downloaded_path, video.url)
+            if not translated_subtitle_path:
+                self.console.print("❌ 字幕翻译失败，工作流停止", style="red")
+                return
+
+            # 步骤 3: 嵌入双语字幕到视频
+            self.console.print(f"\n🎬 步骤 3/5: 嵌入双语字幕到视频", style="bold blue")
+
+            # 查找翻译后的双语字幕
+            parent_dir = downloaded_path.parent
+
+            # 调试：列出文件夹中的所有文件
+            all_files = list(parent_dir.glob("*"))
+            self.console.print(f"📂 视频文件夹中的文件:", style="dim")
+            for f in all_files:
+                self.console.print(f"   - {f.name}", style="dim")
+
+            # 双语字幕路径（统一为 zh.srt）
+            bilingual_subtitle_path = parent_dir / "zh.srt"
+
+            self.console.print(f"📝 双语字幕: {bilingual_subtitle_path.name if bilingual_subtitle_path.exists() else '未找到'}", style="dim")
+
+            if bilingual_subtitle_path.exists():
+                # 使用双语字幕直接嵌入
+                self.console.print("📝 使用双语字幕嵌入视频...")
+                embedded_video_path = await self.subtitle_processor.embed_subtitles_to_video(
+                    downloaded_path, bilingual_subtitle_path
+                )
+                if embedded_video_path:
+                    self.console.print(f"✅ 字幕嵌入完成: {embedded_video_path.name}")
+                    # 更新视频路径为嵌入字幕后的视频
+                    video.downloaded_path = str(embedded_video_path)
+                else:
+                    self.console.print("❌ 字幕嵌入失败，工作流停止", style="red")
+                    return
+            else:
+                self.console.print("❌ 缺少双语字幕文件，工作流停止", style="red")
+                return
+
+            # 步骤 4: 上传到 Bilibili
+            self.console.print(f"\n📤 步骤 4/5: 上传到 Bilibili", style="bold blue")
+
+            # 优化内容为 B 站格式（会自动查找封面图和简介）
+            bilibili_video = self.content_optimizer.optimize_for_bilibili(
+                video, video.downloaded_path
+            )
+
+            self.console.print(f"标题: {bilibili_video.title}")
+            if bilibili_video.cover_path:
+                self.console.print(f"封面: {Path(bilibili_video.cover_path).name}")
+            else:
+                self.console.print("封面: 未找到")
+
+            # 上传
+            result = await self.uploader.upload_video(bilibili_video)
+
+            # 步骤 5: 显示结果
+            self.console.print(f"\n🎊 步骤 5/5: 完成", style="bold green")
+
+            if result.success:
+                self.console.print(f"✅ 上传成功!", style="green")
+                self.console.print(f"   BV 号: {result.bvid}", style="cyan")
+                self.console.print(f"   链接: {result.video_url}", style="cyan")
+                self.console.print("\n🎊 完整工作流执行完成！", style="bold green")
+            else:
+                self.console.print(f"❌ 上传失败: {result.message}", style="red")
+                self.console.print("\n❌ 工作流执行失败", style="red")
+                return
+
+        except KeyboardInterrupt:
+            self.console.print("\n程序被用户中断", style="yellow")
+        except Exception as e:
+            self.console.print(f"❌ 程序执行异常: {str(e)}", style="red")
+            logger.error(f"程序执行异常: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+
+    async def run_prepare_only(self, youtube_url: str) -> None:
+        """运行准备工作流（不上传到B站）
+
+        完成：下载视频、翻译字幕、生成双语字幕并嵌入视频、生成视频简介
+
+        Args:
+            youtube_url: YouTube视频链接
+        """
+        try:
+            self.console.print(
+                "🚀 YouTube 视频准备工作流", style="bold green"
+            )
+            self.console.print("=" * 50, style="green")
+
+            # 步骤 1: 获取视频信息并下载
+            self.console.print(f"\n📥 步骤 1/4: 获取视频信息并下载", style="bold blue")
+            video = await self.downloader.get_video_info(youtube_url)
+            if not video:
+                self.console.print(f"❌ 无法获取视频信息: {youtube_url}", style="red")
+                return
+
+            self.console.print(f"✅ 视频信息获取成功: {video.title}")
+
+            # 下载视频
+            downloaded_path = await self.downloader.download_video(video)
+            if not downloaded_path:
+                self.console.print(f"❌ 视频下载失败: {video.title}", style="red")
+                return
+
+            video.downloaded_path = str(downloaded_path)
+            self.console.print(f"✅ 视频下载完成: {downloaded_path.name}")
+
+            # 步骤 2: 翻译字幕
+            self.console.print(f"\n🌐 步骤 2/4: 翻译字幕", style="bold blue")
+
+            parent_dir = downloaded_path.parent
+
+            # 使用LLM翻译英文字幕
+            translated_subtitle_path = await self.translate_video_subtitles(downloaded_path, video.url)
+            if not translated_subtitle_path:
+                self.console.print("❌ 字幕翻译失败，工作流停止", style="red")
+                return
+
+            # 步骤 3: 嵌入双语字幕到视频
+            self.console.print(f"\n🎬 步骤 3/4: 嵌入双语字幕到视频", style="bold blue")
+
+            # 双语字幕路径（统一为 zh.srt）
+            bilingual_subtitle_path = parent_dir / "zh.srt"
+
+            # 对双语字幕进行时间轴修复预处理
+            self.console.print("🔧 修复字幕时间轴...")
+            if bilingual_subtitle_path.exists():
+                self.console.print(f"   修复双语字幕: {bilingual_subtitle_path.name}", style="dim")
+                fixed_path = self.subtitle_processor.fix_subtitle_overlaps(bilingual_subtitle_path)
+                # 用修复后的字幕替换原字幕
+                import shutil
+                shutil.move(str(fixed_path), str(bilingual_subtitle_path))
+                self.console.print(f"   ✅ 双语字幕修复完成", style="green")
+
+            self.console.print(f"📝 双语字幕: {bilingual_subtitle_path.name if bilingual_subtitle_path.exists() else '未找到'}", style="dim")
+
+            if bilingual_subtitle_path.exists():
+                # 使用双语字幕直接嵌入
+                self.console.print("📝 使用双语字幕嵌入视频...")
+                embedded_video_path = await self.subtitle_processor.embed_subtitles_to_video(
+                    downloaded_path, bilingual_subtitle_path
+                )
+                if embedded_video_path:
+                    self.console.print(f"✅ 字幕嵌入完成: {embedded_video_path.name}")
+                    video.downloaded_path = str(embedded_video_path)
+                else:
+                    self.console.print("❌ 字幕嵌入失败，工作流停止", style="red")
+                    return
+            else:
+                self.console.print("❌ 缺少双语字幕文件，工作流停止", style="red")
+                return
+
+            # 步骤 4: 生成视频简介
+            self.console.print(f"\n📝 步骤 4/4: 生成视频简介", style="bold blue")
+
+            description_path = parent_dir / "video_description.txt"
+            if description_path.exists():
+                self.console.print(f"✅ 视频简介已存在: {description_path.name}")
+            else:
+                # 从翻译后的字幕生成简介
+                if bilingual_subtitle_path.exists():
+                    self.console.print("📝 从双语字幕生成视频简介...")
+                    await self.subtitle_processor.generate_description_from_subtitle(
+                        bilingual_subtitle_path, video.url
+                    )
+                    self.console.print(f"✅ 视频简介生成完成: {description_path.name}")
+                else:
+                    self.console.print("⚠️ 未找到双语字幕，无法生成视频简介", style="yellow")
+
+            # 显示完成信息
+            self.console.print(f"\n🎊 准备工作完成！", style="bold green")
+            self.console.print("=" * 50, style="green")
+            self.console.print(f"📂 视频文件夹: {parent_dir.name}")
+            self.console.print(f"🎬 视频文件: {Path(video.downloaded_path).name}")
+            if bilingual_subtitle_path.exists():
+                self.console.print(f"📝 双语字幕: {bilingual_subtitle_path.name}")
+            if description_path.exists():
+                self.console.print(f"📄 视频简介: {description_path.name}")
+
+            # 显示上传命令提示
+            self.console.print(f"\n💡 上传到B站命令:", style="cyan")
+            self.console.print(f"   python -m src.main --upload-folder {parent_dir.name}", style="dim")
+
+        except KeyboardInterrupt:
+            self.console.print("\n程序被用户中断", style="yellow")
+        except Exception as e:
+            self.console.print(f"❌ 程序执行异常: {str(e)}", style="red")
+            logger.error(f"程序执行异常: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+
+    async def run_upload_folder(self, folder_name: str) -> None:
+        """上传指定文件夹中的视频到B站
+
+        Args:
+            folder_name: data目录下的视频子文件夹名称（如：ChannelName_abc123）
+        """
+        try:
+            self.console.print(
+                "🚀 上传指定文件夹到B站", style="bold green"
+            )
+            self.console.print("=" * 50, style="green")
+
+            # 检查配置
+            if not self._check_config():
+                return
+
+            # 构建文件夹路径
+            download_path = Path(settings.download_path)
+            folder_path = download_path / folder_name
+
+            if not folder_path.exists():
+                self.console.print(f"❌ 文件夹不存在: {folder_name}", style="red")
+                self.console.print(f"   路径: {folder_path}", style="dim")
+                return
+
+            if not folder_path.is_dir():
+                self.console.print(f"❌ 不是文件夹: {folder_name}", style="red")
+                return
+
+            self.console.print(f"📂 文件夹: {folder_name}")
+
+            # 查找视频文件
+            video_files = []
+            for ext in [".mp4", ".mkv", ".webm", ".avi", ".mov", ".flv"]:
+                video_files.extend(folder_path.glob(f"*{ext}"))
+
+            # 优先选择已嵌入字幕的视频（不带 _original 的）
+            non_original_videos = [v for v in video_files if not v.stem.endswith("_original")]
+            if non_original_videos:
+                video_path = non_original_videos[0]
+            elif video_files:
+                video_path = video_files[0]
+            else:
+                self.console.print(f"❌ 文件夹中未找到视频文件", style="red")
+                return
+
+            self.console.print(f"🎬 视频文件: {video_path.name}")
+
+            # 创建LocalVideo对象
+            local_video = LocalVideo(video_path)
+
+            # 获取YouTube信息（如果有video_id）
+            if local_video.video_id:
+                self.console.print("📡 正在获取YouTube视频信息...", style="blue")
+                try:
+                    url = f"https://www.youtube.com/watch?v={local_video.video_id}"
+                    info = await self.downloader.get_video_info(url)
+                    local_video.youtube_info = info
+                    self.console.print(f"✅ 视频标题: {info.title}")
+                except Exception as e:
+                    logger.debug(f"获取视频信息失败: {str(e)}")
+                    self.console.print("⚠️ 无法获取YouTube信息", style="yellow")
+
+            # 显示封面和简介信息
+            self.console.print(f"📄 视频简介: ", style="dim", end="")
+            description_path = folder_path / "video_description.txt"
+            if description_path.exists():
+                self.console.print(f"已找到 ({description_path.name})", style="green")
+            else:
+                self.console.print("未找到", style="yellow")
+
+            self.console.print(f"🖼️  封面图片: ", style="dim", end="")
+            # 优先查找 cover.jpg
+            cover_path = folder_path / "cover.jpg"
+            if cover_path.exists():
+                self.console.print(f"已找到 (cover.jpg)", style="green")
+            else:
+                # 兼容旧格式：查找其他图片文件
+                cover_extensions = [".jpg", ".jpeg", ".png", ".webp"]
+                cover_found = False
+                for ext in cover_extensions:
+                    potential_covers = list(folder_path.glob(f"*{ext}"))
+                    if potential_covers:
+                        self.console.print(f"已找到 ({potential_covers[0].name})", style="green")
+                        cover_found = True
+                        break
+                if not cover_found:
+                    self.console.print("未找到", style="yellow")
+
+            # 确认上传
+            self.console.print(f"\n⚠️  准备上传到B站", style="yellow")
+            from rich.prompt import Confirm
+            if not Confirm.ask("是否继续？"):
+                self.console.print("已取消上传", style="yellow")
+                return
+
+            # 上传到B站
+            await self.upload_local_videos([local_video])
+
+            self.console.print("🎊 上传流程完成！", style="bold green")
+
+        except KeyboardInterrupt:
+            self.console.print("\n程序被用户中断", style="yellow")
+        except Exception as e:
+            self.console.print(f"❌ 程序执行异常: {str(e)}", style="red")
+            logger.error(f"程序执行异常: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+
 
 # CLI入口点
 def cli() -> None:
@@ -1280,34 +1700,82 @@ def cli() -> None:
     parser.add_argument("--all", action="store_true", help="上传data目录内所有视频 (需配合--upload-local使用)")
     parser.add_argument("--dry-run", action="store_true", help="模拟模式，不实际上传（用于测试）")
     parser.add_argument("--batch", metavar="AUTHOR_FILE", help="根据作者文件批量下载 (scripts/author_videonum.txt)")
-    parser.add_argument("--translate", action="store_true", help="下载/上传时自动翻译字幕为中文")
-    parser.add_argument("--translate-subs", metavar="SUBTITLE_FILE", help="翻译指定的字幕文件（独立功能）")
+    parser.add_argument("--translate", action="store_true", help="下载/上传时自动翻译字幕为双语（英文+中文）")
+    parser.add_argument("--translate-subs", metavar="SUBTITLE_FILE", help="翻译指定的字幕文件为双语格式（独立功能）")
+    parser.add_argument("--gen-description", nargs=2, metavar=("BILINGUAL_SUBS", "VIDEO_URL"),
+                        help="从双语字幕生成视频简介: 双语字幕文件 YouTube视频链接")
     parser.add_argument("--embed-subs", action="store_true", help="翻译后将双语字幕嵌入到视频中（需配合--translate使用）")
-    parser.add_argument("--embed-bilingual", nargs=3, metavar=("VIDEO", "EN_SUBS", "ZH_SUBS"),
-                        help="嵌入双语字幕到视频: 视频文件 英文字幕 中文字幕")
+    parser.add_argument("--embed-bilingual", nargs=2, metavar=("VIDEO", "BILINGUAL_SUBS"),
+                        help="嵌入双语字幕到视频: 视频文件 双语字幕文件")
+    parser.add_argument("--convert-to-ass", metavar="SRT_FILE",
+                        help="将SRT字幕转换为ASS格式（支持双语字幕）")
+    parser.add_argument("--full-workflow", metavar="YOUTUBE_URL",
+                        help="完整工作流：下载视频、翻译字幕、生成双语字幕并嵌入、上传到B站")
+    parser.add_argument("--prepare", metavar="YOUTUBE_URL",
+                        help="准备工作流（不上传）：下载视频、翻译字幕、生成双语字幕并嵌入、生成视频简介")
+    parser.add_argument("--upload-folder", metavar="FOLDER_NAME",
+                        help="上传指定文件夹到B站（data目录下的视频子文件夹名称）")
+    parser.add_argument("--check-auth", action="store_true",
+                        help="检查B站认证状态")
 
     args = parser.parse_args()
 
     # 运行主程序
     app = YouTubeToBilibili(
-        enable_upload=args.upload or args.upload_local is not None,
+        enable_upload=args.upload or args.upload_local is not None or args.full_workflow is not None or args.upload_folder is not None,
         dry_run=args.dry_run,
         translate_subs=args.translate,
         embed_subs=args.embed_subs
     )
 
+    # 完整工作流功能
+    if args.full_workflow:
+        asyncio.run(app.run_full_workflow(args.full_workflow))
+        return
+
+    # 准备工作流功能（不上传）
+    if args.prepare:
+        asyncio.run(app.run_prepare_only(args.prepare))
+        return
+
+    # 上传指定文件夹功能
+    if args.upload_folder:
+        asyncio.run(app.run_upload_folder(args.upload_folder))
+        return
+
     # 独立双语字幕嵌入功能
     if args.embed_bilingual:
         video_path = Path(args.embed_bilingual[0])
-        en_subs_path = Path(args.embed_bilingual[1])
-        zh_subs_path = Path(args.embed_bilingual[2])
-        asyncio.run(app.embed_bilingual_subtitles_standalone(video_path, en_subs_path, zh_subs_path))
+        bilingual_subs_path = Path(args.embed_bilingual[1])
+        asyncio.run(app.embed_bilingual_subtitles_standalone(video_path, bilingual_subs_path))
+        return
+
+    # 独立视频简介生成功能
+    if args.gen_description:
+        bilingual_subs_path = Path(args.gen_description[0])
+        video_url = args.gen_description[1]
+        asyncio.run(app.subtitle_processor.generate_description_from_subtitle(bilingual_subs_path, video_url))
+        return
+
+    # SRT转ASS功能
+    if args.convert_to_ass:
+        srt_path = Path(args.convert_to_ass)
+        if not srt_path.exists():
+            print(f"❌ 字幕文件不存在: {srt_path}")
+            return
+        ass_path = app.subtitle_processor.convert_srt_to_ass(srt_path)
+        print(f"✅ ASS字幕已生成: {ass_path}")
         return
 
     # 独立字幕翻译功能
     if args.translate_subs:
         subtitle_path = Path(args.translate_subs)
         asyncio.run(app.translate_subtitle_file(subtitle_path))
+        return
+
+    # 检查B站认证状态
+    if args.check_auth:
+        asyncio.run(app.check_bilibili_auth())
         return
 
     if args.batch:

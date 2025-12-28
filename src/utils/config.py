@@ -21,6 +21,7 @@ class Settings:
         self.download_path: str = "./data"
         self.max_video_size_mb: int = 500
         self.video_quality: str = "720p"
+        self.youtube_cookies_file: Optional[str] = None  # YouTube cookies文件路径
 
         # 上传配置
         self.upload_cooldown_hours: int = 2
@@ -53,6 +54,7 @@ class Settings:
                         # 映射环境变量到属性
                         attr_mapping = {
                             "youtube_api_key": "youtube_api_key",
+                            "youtube_cookies_file": "youtube_cookies_file",
                             "bilibili_sessdata": "bilibili_sessdata",
                             "bilibili_bili_jct": "bilibili_bili_jct",
                             "bilibili_dedeuserid": "bilibili_dedeuser_id",
