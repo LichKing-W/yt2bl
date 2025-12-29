@@ -908,12 +908,11 @@ class SubtitleProcessor:
             logger.error(f"提取纯文本失败: {str(e)}")
             raise
 
-    async def generate_video_description(self, subtitle_text: str, video_url: str, output_path: Optional[Path] = None, subtitle_folder: Optional[Path] = None) -> Path:
+    async def generate_video_description(self, subtitle_text: str, output_path: Optional[Path] = None, subtitle_folder: Optional[Path] = None) -> Path:
         """使用LLM生成视频简介
 
         Args:
             subtitle_text: 字幕纯文本内容
-            video_url: 视频的YouTube原始链接
             output_path: 输出文件路径，如果为None则自动生成
             subtitle_folder: 字幕文件所在文件夹，用于生成默认输出路径
 
@@ -963,8 +962,8 @@ class SubtitleProcessor:
             # 获取生成的简介
             description = response.choices[0].message.content.strip()
 
-            # 在开头添加YouTube原始链接
-            final_description = f"{video_url}\n\n{description}"
+            # 不再在简介开头添加YouTube链接，因为链接已在转载设置(source字段)中
+            final_description = description
 
             # 生成输出路径
             if output_path is None:
@@ -985,12 +984,11 @@ class SubtitleProcessor:
             logger.error(f"生成视频简介失败: {str(e)}")
             raise
 
-    async def generate_description_from_subtitle(self, subtitle_path: Path, video_url: str, output_path: Optional[Path] = None) -> Path:
+    async def generate_description_from_subtitle(self, subtitle_path: Path, output_path: Optional[Path] = None) -> Path:
         """从字幕文件生成视频简介的便捷方法
 
         Args:
             subtitle_path: 中文字幕文件路径
-            video_url: 视频的YouTube原始链接
             output_path: 输出文件路径，如果为None则自动生成
 
         Returns:
@@ -1004,7 +1002,7 @@ class SubtitleProcessor:
 
             # 生成视频简介（传入字幕文件夹以便保存到正确位置）
             description_path = await self.generate_video_description(
-                plain_text, video_url, output_path, subtitle_folder=subtitle_path.parent
+                plain_text, output_path, subtitle_folder=subtitle_path.parent
             )
 
             logger.info(f"视频简介生成完成")
@@ -1204,7 +1202,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             # 如果是SRT格式，转换为ASS格式以支持不同字号
             if subtitle_path.suffix.lower() == '.srt':
                 logger.info("检测到SRT格式字幕，转换为ASS格式以支持双语字号")
-                subtitle_path = self.convert_srt_to_ass(subtitle_path, en_font_size=32, zh_font_size=48)
+                subtitle_path = self.convert_srt_to_ass(subtitle_path, en_font_size=32, zh_font_size=56)
 
             # 使用FFmpeg嵌入字幕（ASS格式）
             # 需要转义路径中的特殊字符

@@ -51,42 +51,6 @@ class BilibiliContentOptimizer:
             "求职",
         ]
 
-        # 标题关键词映射（英文到中文）
-        self.title_keywords = {
-            "tutorial": "教程",
-            "guide": "指南",
-            "introduction": "入门",
-            "advanced": "进阶",
-            "master": "精通",
-            "course": "课程",
-            "lecture": "讲座",
-            "workshop": "工作坊",
-            "project": "项目",
-            "practice": "实战",
-            "tips": "技巧",
-            "tricks": "诀窍",
-            "how to": "如何",
-            "learn": "学习",
-            "build": "构建",
-            "create": "创建",
-            "develop": "开发",
-            "design": "设计",
-            "implement": "实现",
-            "optimize": "优化",
-            "debug": "调试",
-            "test": "测试",
-            "deploy": "部署",
-            "programming": "编程",
-            "coding": "代码",
-            "software": "软件",
-            "development": "开发",
-            "engineering": "工程",
-            "computer": "计算机",
-            "science": "科学",
-            "technology": "技术",
-            "innovation": "创新",
-        }
-
     def optimize_for_bilibili(
         self, youtube_video: YouTubeVideo, video_path: str
     ) -> BilibiliVideo:
@@ -132,7 +96,7 @@ class BilibiliContentOptimizer:
                 cover_path=str(cover_path) if cover_path else None,
                 video_path=video_path,
                 copyright=2,  # 转载
-                source=f"来源：YouTube - {youtube_video.channel_title}",
+                source=youtube_video.url,  # YouTube原视频链接
                 repost_desc=self.generate_repost_description(youtube_video),
                 dynamic=self.generate_dynamic_content(youtube_video),
             )
@@ -147,8 +111,8 @@ class BilibiliContentOptimizer:
                 title=youtube_video.title,
                 description=youtube_video.description,
                 video_path=video_path,
-                copyright=2,
-                source=f"来源：YouTube - {youtube_video.channel_title}",
+                copyright=2,  # 转载
+                source=youtube_video.url,  # YouTube原视频链接
             )
 
     def _find_cover_image(self, video_folder: Path, video_stem: str) -> Optional[Path]:
@@ -220,15 +184,6 @@ class BilibiliContentOptimizer:
             # 移除一些不适合B站的符号
             title = re.sub(r"[|]{2,}", "｜", title)
             title = re.sub(r"\s+", " ", title)
-
-            # 翻译关键词
-            for en_keyword, zh_keyword in self.title_keywords.items():
-                title = re.sub(
-                    r"\b" + re.escape(en_keyword) + r"\b",
-                    zh_keyword,
-                    title,
-                    flags=re.IGNORECASE,
-                )
 
             # 检查标题长度
             if len(title) > 80:  # B站标题限制
@@ -376,13 +331,10 @@ class BilibiliContentOptimizer:
 
     def generate_repost_description(self, youtube_video: YouTubeVideo) -> str:
         """生成转载说明"""
-        return f"""
-本视频转载自YouTube频道「{youtube_video.channel_title}」，原视频链接：{youtube_video.url}
+        return f"""本视频转载自YouTube频道「{youtube_video.channel_title}」
 
-已获得原作者许可的转载声明（如果适用）或仅用于学习交流目的。
-
-如需了解更多内容，请访问原频道观看完整视频。
-        """.strip()
+仅供学习交流使用，版权归原作者所有。
+如需了解更多内容，请访问原频道观看完整视频。""".strip()
 
     def generate_dynamic_content(self, youtube_video: YouTubeVideo) -> str:
         """生成动态内容"""

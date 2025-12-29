@@ -58,9 +58,25 @@ class YouTubeDownloader:
             video_folder.mkdir(parents=True, exist_ok=True)
             logger.info(f"创建视频文件夹: {video_folder.name}")
 
+            # 检查视频是否已存在（检查 _original.mp4 和最终嵌入的 .mp4）
+            safe_title = self._sanitize_filename(video.title)
+            original_video = video_folder / f"{safe_title}_original.mp4"
+            final_video = video_folder / f"{safe_title}.mp4"
+
+            if original_video.exists():
+                logger.info(f"视频已存在，跳过下载: {original_video.name}")
+                return original_video
+            if final_video.exists():
+                logger.info(f"视频已存在（最终版本），跳过下载: {final_video.name}")
+                # 如果最终版本存在，需要检查是否有 _original，如果没有则重命名
+                if not original_video.exists():
+                    import shutil
+                    shutil.copy(str(final_video), str(original_video))
+                    logger.info(f"从最终视频创建原始副本: {original_video.name}")
+                return original_video
+
             # 构建输出文件名（保存到视频专属文件夹）
             # 注意：视频文件下载后会重命名为 {title}_original.mp4
-            safe_title = self._sanitize_filename(video.title)
             output_template = str(video_folder / f"{safe_title}.%(ext)s")
 
             # 首先检查是否有字幕

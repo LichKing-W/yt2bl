@@ -636,21 +636,28 @@ class YouTubeToBilibili:
 
             subtitle_path = None
 
-            # 首先尝试查找带语言代码的字幕文件（如 .en.srt, .zh-Hans.srt）
-            # yt-dlp 下载的字幕文件通常包含语言代码
-            for ext in subtitle_extensions:
-                # 查找所有匹配的字幕文件
-                matches = list(parent_dir.glob(f"{base_name}.*{ext}"))
-                if matches:
-                    # 优先选择英文字幕
-                    for match in matches:
-                        if '.en.' in match.name or '.eng.' in match.name:
-                            subtitle_path = match
-                            break
-                    # 如果没找到英文字幕，使用第一个
-                    if not subtitle_path:
-                        subtitle_path = matches[0]
+            # 首先检查标准命名的字幕文件（下载器重命名后的格式）
+            for filename in ["en.srt", "zh.srt"]:
+                sub_file = parent_dir / filename
+                if sub_file.exists():
+                    subtitle_path = sub_file
                     break
+
+            # 如果没找到标准命名，尝试查找带语言代码的字幕文件（如 .en.srt, .zh-Hans.srt）
+            if not subtitle_path:
+                for ext in subtitle_extensions:
+                    # 查找所有匹配的字幕文件
+                    matches = list(parent_dir.glob(f"{base_name}.*{ext}"))
+                    if matches:
+                        # 优先选择英文字幕
+                        for match in matches:
+                            if '.en.' in match.name or '.eng.' in match.name:
+                                subtitle_path = match
+                                break
+                        # 如果没找到英文字幕，使用第一个
+                        if not subtitle_path:
+                            subtitle_path = matches[0]
+                        break
 
             # 如果没找到带语言代码的，尝试不带语言代码的
             if not subtitle_path:
@@ -671,8 +678,8 @@ class YouTubeToBilibili:
                 self.console.print(f"⚠️ 字幕格式 {subtitle_path.suffix} 暂不支持自动翻译", style="yellow")
                 return None
 
-            # 检查是否已有翻译版本
-            translated_path = subtitle_path.parent / f"{base_name}_zh.srt"
+            # 检查是否已有翻译版本（zh.srt）
+            translated_path = subtitle_path.parent / "zh.srt"
             if translated_path.exists():
                 self.console.print(f"✅ 翻译字幕已存在: {translated_path.name}", style="green")
                 return translated_path
@@ -688,9 +695,7 @@ class YouTubeToBilibili:
                 if video_url:
                     try:
                         self.console.print(f"📝 正在生成视频简介...", style="blue")
-                        description_path = await self.subtitle_processor.generate_description_from_subtitle(
-                            result, video_url
-                        )
+                        description_path = await self.subtitle_processor.generate_description_from_subtitle(result)
                         self.console.print(f"✅ 视频简介已生成: {description_path.name}", style="green")
                     except Exception as e:
                         logger.warning(f"生成视频简介失败: {str(e)}")
@@ -1409,8 +1414,17 @@ class YouTubeToBilibili:
             if bilingual_subtitle_path.exists():
                 # 使用双语字幕直接嵌入
                 self.console.print("📝 使用双语字幕嵌入视频...")
+
+                # 确保使用 _original.mp4 作为输入
+                input_video = downloaded_path
+                if not downloaded_path.stem.endswith("_original"):
+                    original_video = parent_dir / f"{downloaded_path.stem}_original.mp4"
+                    if original_video.exists():
+                        input_video = original_video
+                        logger.info(f"使用原始视频作为输入: {original_video.name}")
+
                 embedded_video_path = await self.subtitle_processor.embed_subtitles_to_video(
-                    downloaded_path, bilingual_subtitle_path
+                    input_video, bilingual_subtitle_path
                 )
                 if embedded_video_path:
                     self.console.print(f"✅ 字幕嵌入完成: {embedded_video_path.name}")
@@ -1525,8 +1539,19 @@ class YouTubeToBilibili:
             if bilingual_subtitle_path.exists():
                 # 使用双语字幕直接嵌入
                 self.console.print("📝 使用双语字幕嵌入视频...")
+
+                # 确保使用 _original.mp4 作为输入
+                # 如果 downloaded_path 是最终版本（不带 _original），查找原始版本
+                input_video = downloaded_path
+                if not downloaded_path.stem.endswith("_original"):
+                    # 查找对应的 _original 文件
+                    original_video = parent_dir / f"{downloaded_path.stem}_original.mp4"
+                    if original_video.exists():
+                        input_video = original_video
+                        logger.info(f"使用原始视频作为输入: {original_video.name}")
+
                 embedded_video_path = await self.subtitle_processor.embed_subtitles_to_video(
-                    downloaded_path, bilingual_subtitle_path
+                    input_video, bilingual_subtitle_path
                 )
                 if embedded_video_path:
                     self.console.print(f"✅ 字幕嵌入完成: {embedded_video_path.name}")
@@ -1548,9 +1573,7 @@ class YouTubeToBilibili:
                 # 从翻译后的字幕生成简介
                 if bilingual_subtitle_path.exists():
                     self.console.print("📝 从双语字幕生成视频简介...")
-                    await self.subtitle_processor.generate_description_from_subtitle(
-                        bilingual_subtitle_path, video.url
-                    )
+                    await self.subtitle_processor.generate_description_from_subtitle(bilingual_subtitle_path)
                     self.console.print(f"✅ 视频简介生成完成: {description_path.name}")
                 else:
                     self.console.print("⚠️ 未找到双语字幕，无法生成视频简介", style="yellow")
@@ -1702,8 +1725,8 @@ def cli() -> None:
     parser.add_argument("--batch", metavar="AUTHOR_FILE", help="根据作者文件批量下载 (scripts/author_videonum.txt)")
     parser.add_argument("--translate", action="store_true", help="下载/上传时自动翻译字幕为双语（英文+中文）")
     parser.add_argument("--translate-subs", metavar="SUBTITLE_FILE", help="翻译指定的字幕文件为双语格式（独立功能）")
-    parser.add_argument("--gen-description", nargs=2, metavar=("BILINGUAL_SUBS", "VIDEO_URL"),
-                        help="从双语字幕生成视频简介: 双语字幕文件 YouTube视频链接")
+    parser.add_argument("--gen-description", metavar="BILINGUAL_SUBS",
+                        help="从双语字幕生成视频简介")
     parser.add_argument("--embed-subs", action="store_true", help="翻译后将双语字幕嵌入到视频中（需配合--translate使用）")
     parser.add_argument("--embed-bilingual", nargs=2, metavar=("VIDEO", "BILINGUAL_SUBS"),
                         help="嵌入双语字幕到视频: 视频文件 双语字幕文件")
@@ -1752,9 +1775,8 @@ def cli() -> None:
 
     # 独立视频简介生成功能
     if args.gen_description:
-        bilingual_subs_path = Path(args.gen_description[0])
-        video_url = args.gen_description[1]
-        asyncio.run(app.subtitle_processor.generate_description_from_subtitle(bilingual_subs_path, video_url))
+        bilingual_subs_path = Path(args.gen_description)
+        asyncio.run(app.subtitle_processor.generate_description_from_subtitle(bilingual_subs_path))
         return
 
     # SRT转ASS功能
