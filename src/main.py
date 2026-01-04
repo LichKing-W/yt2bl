@@ -569,7 +569,7 @@ class YouTubeToBilibili:
                     )
 
                     # 优化内容为B站格式
-                    bilibili_video = self.content_optimizer.optimize_for_bilibili(
+                    bilibili_video = await self.content_optimizer.optimize_for_bilibili(
                         youtube_video, youtube_video.downloaded_path
                     )
 
@@ -1099,7 +1099,7 @@ class YouTubeToBilibili:
                         await self.translate_video_subtitles(local_video.filepath, youtube_video.url)
 
                     # 优化内容为B站格式
-                    bilibili_video = self.content_optimizer.optimize_for_bilibili(
+                    bilibili_video = await self.content_optimizer.optimize_for_bilibili(
                         youtube_video, youtube_video.downloaded_path
                     )
 
@@ -1441,7 +1441,7 @@ class YouTubeToBilibili:
             self.console.print(f"\n📤 步骤 4/5: 上传到 Bilibili", style="bold blue")
 
             # 优化内容为 B 站格式（会自动查找封面图和简介）
-            bilibili_video = self.content_optimizer.optimize_for_bilibili(
+            bilibili_video = await self.content_optimizer.optimize_for_bilibili(
                 video, video.downloaded_path
             )
 
