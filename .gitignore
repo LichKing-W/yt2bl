@@ -174,3 +174,6 @@ $RECYCLE.BIN/
 # 配置文件（可能包含敏感信息）
 config/
 config.json
+.kiro
+.claude
+.ruff_cache
