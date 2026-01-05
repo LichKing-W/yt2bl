@@ -39,12 +39,17 @@ src/
 
 **Setup**:
 ```bash
+# Standard installation (requires virtual environment)
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"  # Include dev dependencies
 # Optional extras:
 pip install -e ".[video]"    # For MoviePy video processing
 pip install -e ".[bilibili]" # For Bilibili upload
 pip install -e ".[translate]" # For subtitle translation via OpenAI
+
+# Alternative: Development mode (run without full install)
+# See INSTALL_GUIDE.md for details
+./scripts/run_dev.sh
 ```
 
 **Running**:
@@ -191,9 +196,9 @@ Configuration is centralized in `src/utils/config.py` via environment variables.
    - **Smart merge algorithm**: Skips merging if a line has >20 Chinese characters (uses `_count_chinese_characters()`)
    - **Chinese character detection**: Unicode range `\u4e00-\u9fff` for identifying Chinese text
    - `convert_srt_to_ass()`: Converts to ASS format with separate styles for Chinese/English
-     - **Chinese style**: VYuan_Round font, white text, red outline, MarginV=60 (positioned above)
-     - **English style**: Arial font, white text, blue outline, MarginV=30 (positioned below)
-     - Separates Chinese and English lines into different Dialogue entries
+     - **Chinese style**: Source Han Sans CN font, white text, dark reddish-brown outline (&H00503129), larger font, positioned below (MarginV=en_font_size+4)
+     - **English style**: DejaVu Sans font, white text, black outline, smaller font, positioned at bottom (MarginV=0)
+     - Separates Chinese and English lines into different Dialogue entries with Layer separation
    - `embed_subtitles_to_video()`: Hardcodes bilingual subtitles into video using FFmpeg
    - `generate_description_from_subtitle()`: Creates video description from translated subtitles
    - Translation prompts are stored in `prompts/translate.md` and `prompts/description.md`
@@ -222,6 +227,20 @@ Configuration is centralized in `src/utils/config.py` via environment variables.
       3. Lower resolution fallback
       4. Any available format
     - Requires FFmpeg installed to merge video/audio streams for 1080p+
+
+12. **Bilibili Content Optimization** (`src/bilibili/content_optimizer.py`):
+    - **LLM-based tag generation**: Automatically generates 3-6 Chinese tags using LLM
+      - Analyzes video description to extract relevant technical keywords
+      - Tags limited to 5 Chinese characters, follows Bilibili user conventions
+      - Falls back to YouTube tags and hot tag list if LLM generation fails
+      - Prompt stored in `prompts/generate_tags.md`
+    - Tag generation hierarchy:
+      1. YouTuber name (if available)
+      2. LLM-generated tags from video description
+      3. YouTube original tags (translated to Chinese if needed)
+      4. Hot tag matching (predefined CS-related tags)
+      5. Language tags ("英语", "中文") for bilingual content
+    - Maximum 12 tags per Bilibili upload (platform limit)
 
 ## Code Quality Standards
 
@@ -284,7 +303,7 @@ The test suite covers critical subtitle processing functionality:
   - Merge logic with short Chinese lines (normal 2:1 merge)
 
 - **`test/test_chinese_style.py`**: Tests ASS subtitle styling
-  - Verifies `Chinese` style definition (VYuan_Round, white text, blue outline)
+  - Verifies `Chinese` style definition (Source Han Sans CN, white text, dark reddish-brown outline)
   - Confirms Chinese/English lines are separated into different Dialogues
   - Validates ASS file generation with correct styling
 
@@ -303,6 +322,9 @@ When working with this codebase, you'll commonly encounter these patterns:
 - Follow the async/await pattern for I/O operations
 - Use consistent SRT data structure: `{"index": int, "start": "HH:MM:SS,mmm", "end": "HH:MM:SS,mmm", "text": str}`
 - For LLM operations, prompts are stored in `prompts/` directory
+  - `translate.md`: Subtitle translation prompt (bilingual English+Chinese)
+  - `description.md`: Video description generation prompt
+  - `generate_tags.md`: Bilibili tag generation prompt
 
 **3. File Naming Conventions**:
 - Downloaded videos: `{title}.mp4` (original), `{title}_original.mp4` (before embedding)
