@@ -219,6 +219,10 @@ class YouTubeSearcher:
                     "no_warnings": True,
                 }
 
+                # 如果配置了代理，添加代理支持
+                if settings.proxy:
+                    ydl_opts["proxy"] = settings.proxy
+
                 loop = asyncio.get_event_loop()
                 info = await loop.run_in_executor(
                     None,
@@ -429,6 +433,10 @@ class YouTubeSearcher:
                 "extract_flat": True,
             }
 
+            # 如果配置了代理，添加代理支持
+            if settings.proxy:
+                ydl_opts["proxy"] = settings.proxy
+
             loop = asyncio.get_event_loop()
             info = await loop.run_in_executor(
                 None,
@@ -514,6 +522,10 @@ class YouTubeSearcher:
                 "extract_flat": True,  # 快速提取，不下载
                 "playlistend": max_results,
             }
+
+            # 如果配置了代理，添加代理支持
+            if settings.proxy:
+                ydl_opts["proxy"] = settings.proxy
 
             # 根据频道标识符格式构建URL（添加/videos后缀获取视频列表）
             if channel_identifier.startswith("@"):

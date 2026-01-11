@@ -46,13 +46,23 @@ class LocalVideo:
         self.youtube_info = None
 
     def _extract_video_id(self) -> Optional[str]:
-        """从文件名提取视频ID"""
-        # 文件名格式: {video_id}_{title}.{ext}
+        """从文件夹名或文件名提取视频ID"""
+        # 优先从文件夹名提取（格式: {YouTuber名}|{video_id}）
+        folder_name = self.filepath.parent.name
+        if "|" in folder_name:
+            # 提取竖线后的 video_id
+            parts = folder_name.split("|")
+            if len(parts) >= 2:
+                video_id = parts[-1].strip()
+                # 验证 video_id 格式（11位字母数字下划线连字符）
+                if re.match(r"^[a-zA-Z0-9_-]{11}$", video_id):
+                    return video_id
+
+        # 备用方案：从文件名提取（格式: {video_id}_{title}.{ext}）
         match = re.match(r"^([a-zA-Z0-9_-]{11})_", self.filename)
         if match:
             return match.group(1)
-        # 如果没有video_id前缀，尝试从标题中提取（如可能）
-        # 或者返回None，稍后可通过其他方式获取
+
         return None
 
     def _extract_title(self) -> str:
@@ -106,6 +116,49 @@ class YouTubeToBilibili:
                     print(text)
 
         return FallbackConsole()
+
+    def _get_subscription_history_file(self) -> Path:
+        """获取订阅历史记录文件路径"""
+        return Path("subscription_history.json")
+
+    def _add_to_subscription_history(self, video_id: str) -> None:
+        """添加视频ID到订阅历史记录
+
+        Args:
+            video_id: YouTube视频ID
+        """
+        history_file = self._get_subscription_history_file()
+
+        # 加载现有历史记录
+        processed_videos = set()
+        if history_file.exists():
+            try:
+                import json
+                with open(history_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    processed_videos = set(data.get("processed_videos", []))
+            except Exception as e:
+                logger.warning(f"加载历史记录失败: {e}")
+
+        # 添加新视频ID
+        if video_id not in processed_videos:
+            processed_videos.add(video_id)
+
+            # 保存更新后的历史记录
+            try:
+                import json
+                from datetime import datetime
+                history_file.parent.mkdir(parents=True, exist_ok=True)
+                with open(history_file, "w", encoding="utf-8") as f:
+                    json.dump({
+                        "processed_videos": list(processed_videos),
+                        "last_updated": datetime.now().isoformat(),
+                    }, f, ensure_ascii=False, indent=2)
+                logger.info(f"已添加视频到历史记录: {video_id}")
+            except Exception as e:
+                logger.error(f"保存历史记录失败: {e}")
+        else:
+            logger.debug(f"视频已在历史记录中: {video_id}")
 
     async def search_and_download(self, max_videos: int = 10) -> List[YouTubeVideo]:
         """搜索并下载视频"""
@@ -1462,6 +1515,9 @@ class YouTubeToBilibili:
                 self.console.print(f"   BV 号: {result.bvid}", style="cyan")
                 self.console.print(f"   链接: {result.video_url}", style="cyan")
                 self.console.print("\n🎊 完整工作流执行完成！", style="bold green")
+
+                # 添加到订阅历史记录
+                self._add_to_subscription_history(video.video_id)
             else:
                 self.console.print(f"❌ 上传失败: {result.message}", style="red")
                 self.console.print("\n❌ 工作流执行失败", style="red")

@@ -1,10 +1,9 @@
 """YouTube视频下载模块"""
 
 import asyncio
-import os
-from pathlib import Path
-from typing import Optional, Dict, Any, Callable
 from datetime import datetime
+from pathlib import Path
+from typing import Any, Callable, Dict, Optional
 
 try:
     import yt_dlp
@@ -111,6 +110,11 @@ class YouTubeDownloader:
                 ydl_opts["cookiefile"] = self.cookies_file
                 logger.info(f"使用cookies文件: {self.cookies_file}")
 
+            # 如果配置了代理，添加代理支持
+            if settings.proxy:
+                ydl_opts["proxy"] = settings.proxy
+                logger.info(f"使用代理: {settings.proxy}")
+
             # 添加进度回调
             if progress_callback:
                 ydl_opts["progress_hooks"] = [
@@ -130,10 +134,9 @@ class YouTubeDownloader:
                 # 检查封面图是否下载成功
                 await self._check_thumbnail_files(result)
 
-                # 重命名原始视频为 {title}_original.mp4
-                await self._rename_original_video(result)
-
-                return result
+                # 重命名原始视频为 {title}_original.mp4，并获取新的路径
+                renamed_path = await self._rename_original_video(result)
+                return renamed_path if renamed_path else result
             else:
                 logger.error(f"下载失败: {video.title}")
                 return None
@@ -145,13 +148,16 @@ class YouTubeDownloader:
     async def _check_subtitles(self, url: str) -> bool:
         """检查视频是否有字幕"""
         try:
-            import yt_dlp
 
             ydl_opts = {
                 "quiet": True,
                 "no_warnings": True,
                 "skip_download": True,  # 不下载视频
             }
+
+            # 如果配置了代理，添加代理支持
+            if settings.proxy:
+                ydl_opts["proxy"] = settings.proxy
 
             loop = asyncio.get_event_loop()
             info = await loop.run_in_executor(
@@ -217,7 +223,7 @@ class YouTubeDownloader:
                             f"字幕为VTT格式，将重命名为.srt: {found_en_sub.name}"
                         )
                     found_en_sub.rename(target_en)
-                    logger.info(f"英文字幕已重命名为: en.srt")
+                    logger.info("英文字幕已重命名为: en.srt")
             else:
                 logger.info("未找到英文字幕文件")
 
@@ -263,7 +269,7 @@ class YouTubeDownloader:
                     ):
                         # 已是JPG格式，直接重命名
                         thumb.rename(cover_jpg)
-                        logger.info(f"封面图已重命名为: cover.jpg")
+                        logger.info("封面图已重命名为: cover.jpg")
                         # 删除其他封面图
                         for other_thumb in found_thumbnails:
                             if other_thumb != thumb and other_thumb.exists():
@@ -285,7 +291,7 @@ class YouTubeDownloader:
                                         img = img.convert("RGB")
                                     # 保存为JPG格式
                                     img.save(cover_jpg, "JPEG", quality=95)
-                                logger.info(f"封面图已转换为: cover.jpg")
+                                logger.info("封面图已转换为: cover.jpg")
                                 # 删除原文件
                                 try:
                                     thumb.unlink()
@@ -319,8 +325,15 @@ class YouTubeDownloader:
         except Exception as e:
             logger.debug(f"检查封面图文件失败: {str(e)}")
 
-    async def _rename_original_video(self, video_path: Path) -> None:
-        """将原始视频重命名为 {title}_original.mp4"""
+    async def _rename_original_video(self, video_path: Path) -> Optional[Path]:
+        """将原始视频重命名为 {title}_original.mp4，并返回新路径
+
+        Args:
+            video_path: 原始视频文件路径
+
+        Returns:
+            重命名后的视频文件路径，如果文件已经是_original结尾或重命名失败则返回原路径
+        """
         try:
             parent_dir = video_path.parent
             base_name = video_path.stem  # 原始视频标题
@@ -338,9 +351,14 @@ class YouTubeDownloader:
 
                 video_path.rename(original_path)
                 logger.info(f"原始视频已重命名为: {original_name}")
+                return original_path
+
+            # 文件已经是_original结尾，直接返回原路径
+            return video_path
 
         except Exception as e:
             logger.error(f"重命名原始视频失败: {str(e)}")
+            return None
 
     def _download_sync(self, url: str, ydl_opts: Dict[str, Any]) -> Optional[Path]:
         """同步下载方法"""
@@ -537,6 +555,10 @@ class YouTubeDownloader:
             if self.cookies_file and Path(self.cookies_file).exists():
                 ydl_opts["cookiefile"] = self.cookies_file
 
+            # 如果配置了代理，添加代理支持
+            if settings.proxy:
+                ydl_opts["proxy"] = settings.proxy
+
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 return ydl.extract_info(url, download=False)
 
@@ -546,7 +568,6 @@ class YouTubeDownloader:
 
     def _parse_video_info(self, info: Dict[str, Any]) -> YouTubeVideo:
         """解析视频信息"""
-        from datetime import datetime
 
         # 解析发布时间
         upload_date = info.get("upload_date")

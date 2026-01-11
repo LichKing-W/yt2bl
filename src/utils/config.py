@@ -40,6 +40,9 @@ class Settings:
         self.ffmpeg_hwaccel: str = "auto"  # auto, nvenc, qsv, amf, videotoolbox, vaapi, none
         self.ffmpeg_preset: str = "fast"  # 编码器预设 (fast, medium, slow, etc.)
 
+        # 代理配置
+        self.proxy: Optional[str] = None  # HTTP/HTTPS 代理地址 (例如: http://127.0.0.1:7897)
+
         self._load_env()
         self._ensure_directories()
 
@@ -74,6 +77,7 @@ class Settings:
                             "log_file": "log_file",
                             "ffmpeg_hwaccel": "ffmpeg_hwaccel",
                             "ffmpeg_preset": "ffmpeg_preset",
+                            "proxy": "proxy",
                         }
 
                         attr_name = attr_mapping.get(key)

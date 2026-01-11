@@ -32,9 +32,8 @@ class SubscriptionMonitor:
     1. 从 youtuber.txt 读取YouTuber列表
     2. 检查每个频道的新视频（最近3条）
     3. 与历史记录对比，找出未处理的视频
-    4. 新YouTuber仅处理最新一条视频（避免批量处理历史视频）
-    5. 使用 full-workflow 处理视频（下载、翻译、嵌入字幕、上传）
-    6. 失败重试一次，再失败则跳过
+    4. 使用 full-workflow 处理视频（下载、翻译、嵌入字幕、上传）
+    5. 失败重试一次，再失败则跳过
     """
 
     # 历史记录文件路径
@@ -78,9 +77,25 @@ class SubscriptionMonitor:
             try:
                 with open(self.HISTORY_FILE, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                    return set(data.get("processed_videos", []))
+                    processed = set(data.get("processed_videos", []))
+                    logger.info(f"成功加载历史记录: {len(processed)} 个已处理视频")
+                    return processed
+            except json.JSONDecodeError as e:
+                logger.error(f"历史记录文件JSON格式错误: {e}")
+                logger.error(f"错误位置: 第{e.lineno}行, 第{e.colno}列")
+                logger.error(f"请修复 {self.HISTORY_FILE} 文件的JSON格式")
+                # 尝试备份损坏的文件
+                backup_path = self.HISTORY_FILE.with_suffix(".json.corrupted")
+                try:
+                    import shutil
+                    shutil.copy(self.HISTORY_FILE, backup_path)
+                    logger.info(f"已将损坏的文件备份到 {backup_path}")
+                except Exception:
+                    pass
             except Exception as e:
                 logger.warning(f"加载历史记录失败: {e}")
+        else:
+            logger.info("历史记录文件不存在，将创建新文件")
         return set()
 
     def _save_history(self):
@@ -218,28 +233,10 @@ class SubscriptionMonitor:
                     if video.video_id not in self.processed_videos
                 ]
 
-                if not unprocessed_videos:
-                    continue
-
-                # 检查是否是新添加的YouTuber（没有任何该频道的视频在历史记录中）
-                has_channel_in_history = any(
-                    video.channel_id == channel_id or video.channel_title == channel_title
-                    for video in videos
-                    if video.video_id in self.processed_videos
-                )
-
-                if not has_channel_in_history:
-                    # 新YouTuber：只处理最新的一条视频
-                    latest_video = unprocessed_videos[0]
-                    new_videos.append(latest_video)
-                    logger.info(f"  发现新YouTuber，仅处理最新视频: {latest_video.title}")
-                    if self.console:
-                        self.console.print(f"  [yellow]新YouTuber检测[/yellow]: 仅处理最新视频 [cyan]{latest_video.title}[/cyan]")
-                else:
-                    # 已监控的YouTuber：处理所有新视频
-                    for video in unprocessed_videos:
-                        new_videos.append(video)
-                        logger.info(f"  发现新视频: {video.title}")
+                # 处理所有新视频
+                for video in unprocessed_videos:
+                    new_videos.append(video)
+                    logger.info(f"  发现新视频: {video.title}")
 
             except Exception as e:
                 logger.error(f"检查频道 {channel_title} 失败: {e}")
@@ -279,10 +276,8 @@ class SubscriptionMonitor:
 
         try:
             # 使用 full workflow 处理视频
+            # 上传成功后会自动添加到历史记录
             await self.yt2bl.run_full_workflow(video.url)
-
-            # 成功后添加到历史记录
-            self._add_to_history(video.video_id)
 
             if self.console:
                 self.console.print(f"[green]✓[/green] {prefix}完成！")

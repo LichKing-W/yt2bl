@@ -19,6 +19,7 @@ YouTube to Bilibili video transfer tool for computer science content. The projec
 - LLM-based Chinese title generation from video descriptions
 - Bilingual subtitle embedding (English + Chinese) with ASS format support
 - Video description and tag generation from translated subtitles
+- Subscription monitoring daemon for automated video transfer from subscribed channels
 
 ## Architecture
 
@@ -28,6 +29,7 @@ src/
 ├── bilibili/         # Bilibili integration (upload, content optimization)
 ├── core/             # Video/subtitle processing (FFmpeg-based)
 ├── utils/            # Config, logging
+├── subscription_monitor.py  # Subscription monitoring daemon
 └── main.py          # CLI entry point with YouTubeToBilibili class
 ```
 
@@ -76,6 +78,7 @@ This single command will:
 5. Generate Bilibili tags using LLM
 6. Create bilingual subtitles and embed into video
 7. Upload to Bilibili with cover image, Chinese title, tags, and description
+8. **Add video ID to subscription history** (preventing re-processing by subscription monitor)
 
 **Two-Step Workflow (Prepare + Upload)**:
 ```bash
@@ -134,6 +137,66 @@ python -m src.main --batch scripts/author_videonum.txt
 python -m src.main --check-auth
 ```
 
+**Subscription Monitoring**:
+```bash
+# Run subscription monitor (continuous mode)
+./scripts/run_subscription_monitor.sh run
+# Or directly:
+python -m src.subscription_monitor run
+
+# Run once (for testing)
+./scripts/run_subscription_monitor.sh once
+python -m src.subscription_monitor once
+
+# Test mode with verbose output
+python -m src.subscription_monitor test
+
+# Custom check interval (default: 3600 seconds = 1 hour)
+python -m src.subscription_monitor run --interval 1800
+
+# Disable subtitle translation or embedding
+python -m src.subscription_monitor run --no-translate --no-embed
+```
+The subscription monitor (`src/subscription_monitor.py`):
+- **Fetches subscriptions**: Uses YouTube cookies to get your subscribed channels
+- **Checks for new videos**: Gets latest 3 videos per channel, compares against history
+- **Processes queue**: Downloads, translates, embeds subtitles, uploads to Bilibili serially
+- **Retry logic**: Failed videos are retried once, then skipped
+- **History tracking**: Processed video IDs are saved to `subscription_history.json` (permanent, in project root)
+  - History is updated automatically after each successful upload
+  - Manual `--full-workflow` runs also update history
+  - Both monitor and manual workflows use the same history file
+- **Continuous monitoring**: Checks every hour (configurable) for new videos
+- **Singleton lock**: Uses file-based lock (`.updating`) to prevent multiple instances running simultaneously
+
+**Running as a background service**:
+
+Option 1: systemd (Linux):
+```bash
+# Copy and edit the service file
+sudo cp scripts/yt2bl-monitor.service.example /etc/systemd/system/yt2bl-monitor.service
+sudo vim /etc/systemd/system/yt2bl-monitor.service  # Update paths (User, WorkingDirectory, ExecStart)
+
+# Enable and start
+sudo systemctl daemon-reload
+sudo systemctl enable yt2bl-monitor
+sudo systemctl start yt2bl-monitor
+sudo systemctl status yt2bl-monitor
+# View logs:
+sudo journalctl -u yt2bl-monitor -f
+```
+
+Option 2: crontab (Linux/macOS):
+```bash
+# Copy the crontab example and modify paths
+cp scripts/crontab.example /tmp/my_crontab
+# Edit /tmp/my_crontab to update paths and set schedule
+# Install crontab:
+crontab /tmp/my_crontab
+# View installed crontab:
+crontab -l
+```
+
 **Testing**:
 ```bash
 pytest test/ -v                    # Run all tests
@@ -154,12 +217,33 @@ Configuration is centralized in `src/utils/config.py` via environment variables.
 
 - `YOUTUBE_API_KEY`: Optional (fallback to mock data if not provided)
 - `YOUTUBE_COOKIES_FILE`: Path to YouTube cookies file (Netscape format) to bypass bot detection
+- `PROXY`: HTTP/HTTPS proxy for YouTube access (e.g., `http://127.0.0.1:7897`)
 - `BILIBILI_SESSDATA`, `BILIBILI_BILI_JCT`, `BILIBILI_DedeUserID`: Required for upload
 - `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`: For subtitle translation (default: gpt-4o-mini)
 - `DOWNLOAD_PATH`: Default `./data`
 - `MAX_VIDEO_SIZE_MB`, `VIDEO_QUALITY`, `UPLOAD_COOLDOWN_HOURS`, `AUTO_PUBLISH`
 - `FFMPEG_HWACCEL`: Hardware acceleration for subtitle embedding (auto, nvenc, qsv, amf, videotoolbox, vaapi, none)
 - `FFMPEG_PRESET`: Encoder preset for quality/speed balance (fast, medium, slow, etc.)
+- `SUBSCRIPTION_CHECK_INTERVAL`: Subscription monitor check interval in seconds (default: 3600 = 1 hour)
+- `SUBSCRIPTION_VIDEOS_PER_CHANNEL`: Number of recent videos to check per channel (default: 3)
+
+**Proxy Configuration**:
+
+Proxy support is integrated into the Python code via `.env` configuration:
+
+1. **In .env file**: Set the `PROXY` variable
+   ```bash
+   PROXY=http://127.0.0.1:7897
+   ```
+
+2. **Application scope**: The proxy is automatically applied to:
+   - All yt-dlp operations (download, search, channel info)
+   - YouTube video downloads
+   - YouTube channel checks (subscription monitor)
+
+3. **No environment variables needed**: Unlike the old approach, you don't need to set `HTTP_PROXY`/`HTTPS_PROXY` in crontab or systemd. The Python code reads `PROXY` from `.env` and passes it to yt-dlp directly.
+
+**Note**: The old `.env.cron` file is deprecated. Use `PROXY` in `.env` instead.
 
 ## Important Implementation Details
 
@@ -224,6 +308,12 @@ Configuration is centralized in `src/utils/config.py` via environment variables.
      - `source`: YouTube original video URL
      - `repost_desc`: Repost declaration with channel name
      - Video descriptions no longer include YouTube URL at the beginning (it's in repost settings)
+   - **Subscription monitoring**:
+     - `youtuber.txt`: Channel list for subscription monitor (one per line)
+       - Supports: `@username`, `UC...ID`, or full YouTube channel URLs
+       - Empty lines and `#` comments are ignored
+     - `subscription_history.json`: Persistent history of processed video IDs (in project root, not data/)
+     - `.updating`: Lock file to prevent multiple monitor instances running simultaneously
 
 10. **Author Batch Processing**: `scripts/author_videonum.txt` format is TSV: `channel_id\tmax_videos` (one per line, supports # comments)
 
@@ -256,6 +346,30 @@ Configuration is centralized in `src/utils/config.py` via environment variables.
       4. Hot tag matching (predefined CS-related tags)
       5. Language tags ("英语", "中文") for bilingual content
     - Maximum 12 tags per Bilibili upload (platform limit)
+
+13. **Subscription Monitor Architecture** (`src/subscription_monitor.py`):
+    - **Singleton pattern**: Uses file-based lock `.updating` to prevent concurrent executions
+      - If lock file exists and process is running, new instance exits gracefully
+      - Lock file automatically cleaned up on process exit (using `atexit`)
+    - **History management**: Persistent JSON storage (`subscription_history.json` in project root)
+      - Tracks all processed video IDs across runs
+      - Survives process restarts and system reboots
+      - Automatically backs up corrupted JSON files with `.json.corrupted` extension
+    - **History updates**: When using `--full-workflow` (manually or via monitor)
+      - History is updated automatically in `src/main.py` after successful upload
+      - Both `subscription_monitor.py` and `main.py` use the same file path
+      - Manual `--full-workflow` runs will also update history (preventing re-processing)
+    - **Error recovery**: Corrupted history file is backed up and recreated from scratch
+    - **Source of subscriptions**: Reads from `youtuber.txt` (one channel identifier per line)
+      - Supports: `@username`, `UC...ID`, or full YouTube channel URLs
+    - **Processing workflow**:
+      1. Acquire singleton lock
+      2. Fetch subscriptions from youtuber.txt
+      3. For each channel, get latest N videos (default: 3)
+      4. Filter out already-processed videos (from history)
+      5. Process new videos serially using `--full-workflow`
+      6. History is updated automatically by `run_full_workflow()` after successful upload
+      7. Release lock on completion
 
 ## Code Quality Standards
 
