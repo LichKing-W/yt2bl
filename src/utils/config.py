@@ -36,6 +36,10 @@ class Settings:
         self.log_level: str = "INFO"
         self.log_file: str = "./logs/app.log"
 
+        # FFmpeg配置
+        self.ffmpeg_hwaccel: str = "auto"  # auto, nvenc, qsv, amf, videotoolbox, vaapi, none
+        self.ffmpeg_preset: str = "fast"  # 编码器预设 (fast, medium, slow, etc.)
+
         self._load_env()
         self._ensure_directories()
 
@@ -68,6 +72,8 @@ class Settings:
                             "openai_model": "openai_model",
                             "log_level": "log_level",
                             "log_file": "log_file",
+                            "ffmpeg_hwaccel": "ffmpeg_hwaccel",
+                            "ffmpeg_preset": "ffmpeg_preset",
                         }
 
                         attr_name = attr_mapping.get(key)

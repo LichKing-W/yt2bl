@@ -16,8 +16,9 @@ YouTube to Bilibili video transfer tool for computer science content. The projec
 - Full end-to-end workflow: download → translate subtitles → embed bilingual subtitles → upload
 - Two-step workflow: `--prepare` (stops before upload) + `--upload-folder` (uploads prepared folder)
 - LLM-based subtitle translation with format validation and retry logic
+- LLM-based Chinese title generation from video descriptions
 - Bilingual subtitle embedding (English + Chinese) with ASS format support
-- Video description generation from translated subtitles
+- Video description and tag generation from translated subtitles
 
 ## Architecture
 
@@ -56,7 +57,7 @@ pip install -e ".[translate]" # For subtitle translation via OpenAI
 ```bash
 python -m src.main --max-videos 5
 python -m src.main --url "https://youtube.com/watch?v=ID"
-python -m src.main --channel-id "@username"  # Download from channel
+python -m src.main --channel-id "@username"  # Download from channel (@username, UC...ID, or full URL)
 yt2bl --max-videos 3    # After pip install -e .
 ```
 
@@ -68,11 +69,13 @@ python -m src.main --full-workflow "https://youtube.com/watch?v=VIDEO_ID"
 yt2bl --full-workflow "https://youtube.com/watch?v=VIDEO_ID"
 ```
 This single command will:
-1. Download video, English subtitles, and thumbnail to `data/{author}_{video_id}/`
+1. Download video, English subtitles, and thumbnail to `data/{author}|{video_id}/`
 2. Preprocess subtitles and translate them using LLM
 3. Generate video description from translated subtitles (first line is original YouTube URL)
-4. Create bilingual subtitles and embed into video
-5. Upload to Bilibili with cover image and description
+4. Generate Chinese title using LLM
+5. Generate Bilibili tags using LLM
+6. Create bilingual subtitles and embed into video
+7. Upload to Bilibili with cover image, Chinese title, tags, and description
 
 **Two-Step Workflow (Prepare + Upload)**:
 ```bash
@@ -83,10 +86,11 @@ python -m src.main --prepare "https://youtube.com/watch?v=VIDEO_ID"
 python -m src.main --upload-folder "ChannelName_VIDEO_ID"
 ```
 The `--prepare` command completes everything EXCEPT uploading to Bilibili:
-- Downloads video, subtitles, and thumbnail to `data/{author}_{video_id}/`
+- Downloads video, subtitles, and thumbnail to `data/{author}|{video_id}/`
 - Translates subtitles to Chinese
 - Merges and embeds bilingual subtitles into video
 - Generates video description from translated subtitles
+- Generates Chinese title and Bilibili tags using LLM
 - Outputs the folder name and upload command at completion
 
 The `--upload-folder` command uploads a prepared video folder to Bilibili:
@@ -154,6 +158,8 @@ Configuration is centralized in `src/utils/config.py` via environment variables.
 - `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`: For subtitle translation (default: gpt-4o-mini)
 - `DOWNLOAD_PATH`: Default `./data`
 - `MAX_VIDEO_SIZE_MB`, `VIDEO_QUALITY`, `UPLOAD_COOLDOWN_HOURS`, `AUTO_PUBLISH`
+- `FFMPEG_HWACCEL`: Hardware acceleration for subtitle embedding (auto, nvenc, qsv, amf, videotoolbox, vaapi, none)
+- `FFMPEG_PRESET`: Encoder preset for quality/speed balance (fast, medium, slow, etc.)
 
 ## Important Implementation Details
 
@@ -193,8 +199,10 @@ Configuration is centralized in `src/utils/config.py` via environment variables.
      - **Format validation**: Checks if all subtitles contain both English and Chinese, retries up to 5 times if format is incorrect
      - Validates translation completeness and fills missing entries with original text
    - Preprocessing steps: fix timeline overlaps → merge subtitle lines (2:1) → LLM translation
-   - **Smart merge algorithm**: Skips merging if a line has >20 Chinese characters (uses `_count_chinese_characters()`)
-   - **Chinese character detection**: Unicode range `\u4e00-\u9fff` for identifying Chinese text
+   - **Smart merge algorithm**: Merges 2 subtitle lines into 1
+     - Uses first line's start time and second line's end time
+     - Skips merging if combined text has >15 words (uses `_count_words()`)
+     - Word counting uses regex `\b[\w-]+\b` to handle punctuation and hyphens
    - `convert_srt_to_ass()`: Converts to ASS format with separate styles for Chinese/English
      - **Chinese style**: Source Han Sans CN font, white text, dark reddish-brown outline (&H00503129), larger font, positioned below (MarginV=en_font_size+4)
      - **English style**: DejaVu Sans font, white text, black outline, smaller font, positioned at bottom (MarginV=0)
@@ -204,9 +212,9 @@ Configuration is centralized in `src/utils/config.py` via environment variables.
    - Translation prompts are stored in `prompts/translate.md` and `prompts/description.md`
 
 9. **File Organization**:
-   - Each video gets its own subfolder: `data/{author_name}_{video_id}/`
+   - Each video gets its own subfolder: `data/{author_name}|{video_id}/`
    - All files for a video (video, bilingual subtitles, descriptions, thumbnail) are stored in its subfolder
-   - Example: `data/ChannelName_abc123/video.mp4`, `data/ChannelName_abc123/video_zh.srt`
+   - Example: `data/ChannelName|abc123/video.mp4`, `data/ChannelName|abc123/video_zh.srt`
    - Thumbnails are automatically downloaded and saved as `{video_title}.jpg`
    - **Subtitle files**: Only English subtitles `{title}.en.srt` are downloaded from YouTube
      - Bilingual subtitles `zh.srt` are generated by LLM translation (contains both English and Chinese)
@@ -229,6 +237,13 @@ Configuration is centralized in `src/utils/config.py` via environment variables.
     - Requires FFmpeg installed to merge video/audio streams for 1080p+
 
 12. **Bilibili Content Optimization** (`src/bilibili/content_optimizer.py`):
+    - **LLM-based Chinese title generation**: Automatically generates Chinese titles using LLM
+      - Analyzes original English title and video description
+      - Title length: 5-20 Chinese characters (max 80 chars)
+      - Technical terms may remain in English (e.g., API, dlopen, Python)
+      - Appends YouTuber name automatically: "中文标题 | YouTuber名"
+      - Prompt stored in `prompts/generate_title.md`
+      - Falls back to original title if LLM generation fails
     - **LLM-based tag generation**: Automatically generates 3-6 Chinese tags using LLM
       - Analyzes video description to extract relevant technical keywords
       - Tags limited to 5 Chinese characters, follows Bilibili user conventions
@@ -298,14 +313,17 @@ The test suite covers critical subtitle processing functionality:
   - Full workflow end-to-end test
 
 - **`test/test_merge_algorithm.py`**: Tests smart subtitle merging
-  - Chinese character counting (`_count_chinese_characters()`)
-  - Merge logic with long Chinese lines (>20 chars stay separate)
-  - Merge logic with short Chinese lines (normal 2:1 merge)
+  - Word counting (`_count_words()`)
+  - Merge logic with long combined text (>15 words stay separate)
+  - Merge logic with short combined text (normal 2:1 merge)
 
 - **`test/test_chinese_style.py`**: Tests ASS subtitle styling
   - Verifies `Chinese` style definition (Source Han Sans CN, white text, dark reddish-brown outline)
   - Confirms Chinese/English lines are separated into different Dialogues
   - Validates ASS file generation with correct styling
+
+- **`test/test_video_processor.py`**: Tests video processing functionality
+- **`test/test_youtube_searcher.py`**: Tests YouTube search and video filtering
 
 ## Common Workflow Patterns
 
@@ -325,6 +343,7 @@ When working with this codebase, you'll commonly encounter these patterns:
   - `translate.md`: Subtitle translation prompt (bilingual English+Chinese)
   - `description.md`: Video description generation prompt
   - `generate_tags.md`: Bilibili tag generation prompt
+  - `generate_title.md`: Chinese title generation prompt
 
 **3. File Naming Conventions**:
 - Downloaded videos: `{title}.mp4` (original), `{title}_original.mp4` (before embedding)

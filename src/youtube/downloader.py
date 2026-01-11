@@ -38,7 +38,9 @@ class YouTubeDownloader:
         if not YT_DLP_AVAILABLE:
             logger.warning("yt-dlp模块不可用，将使用模拟下载")
 
-    async def download_video(self, video: YouTubeVideo, progress_callback: Optional[Callable] = None) -> Optional[Path]:
+    async def download_video(
+        self, video: YouTubeVideo, progress_callback: Optional[Callable] = None
+    ) -> Optional[Path]:
         """下载视频"""
         if not YT_DLP_AVAILABLE:
             logger.error("yt-dlp不可用，无法下载视频")
@@ -71,6 +73,7 @@ class YouTubeDownloader:
                 # 如果最终版本存在，需要检查是否有 _original，如果没有则重命名
                 if not original_video.exists():
                     import shutil
+
                     shutil.copy(str(final_video), str(original_video))
                     logger.info(f"从最终视频创建原始副本: {original_video.name}")
                 return original_video
@@ -110,11 +113,15 @@ class YouTubeDownloader:
 
             # 添加进度回调
             if progress_callback:
-                ydl_opts["progress_hooks"] = [self._create_progress_hook(progress_callback)]
+                ydl_opts["progress_hooks"] = [
+                    self._create_progress_hook(progress_callback)
+                ]
 
             # 在线程池中执行下载
             loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(None, self._download_sync, video.url, ydl_opts)
+            result = await loop.run_in_executor(
+                None, self._download_sync, video.url, ydl_opts
+            )
 
             if result:
                 logger.info(f"下载完成: {result}")
@@ -164,7 +171,9 @@ class YouTubeDownloader:
             has_subs = bool(subtitles or automatic_captions)
 
             if has_subs:
-                available_langs = list(subtitles.keys()) + list(automatic_captions.keys())
+                available_langs = list(subtitles.keys()) + list(
+                    automatic_captions.keys()
+                )
                 logger.info(f"视频有可用字幕: {', '.join(set(available_langs))}")
 
             return has_subs
@@ -204,7 +213,9 @@ class YouTubeDownloader:
                     # 如果是VTT格式，转换为SRT
                     if found_en_sub.suffix.lower() == ".vtt":
                         # 这里可以添加VTT转SRT的逻辑，暂时直接重命名
-                        logger.warning(f"字幕为VTT格式，将重命名为.srt: {found_en_sub.name}")
+                        logger.warning(
+                            f"字幕为VTT格式，将重命名为.srt: {found_en_sub.name}"
+                        )
                     found_en_sub.rename(target_en)
                     logger.info(f"英文字幕已重命名为: en.srt")
             else:
@@ -246,7 +257,10 @@ class YouTubeDownloader:
                 cover_jpg = parent_dir / "cover.jpg"
 
                 for thumb in found_thumbnails:
-                    if thumb.suffix.lower() in [".jpg", ".jpeg"] and thumb.name != "cover.jpg":
+                    if (
+                        thumb.suffix.lower() in [".jpg", ".jpeg"]
+                        and thumb.name != "cover.jpg"
+                    ):
                         # 已是JPG格式，直接重命名
                         thumb.rename(cover_jpg)
                         logger.info(f"封面图已重命名为: cover.jpg")
@@ -257,7 +271,9 @@ class YouTubeDownloader:
                                     other_thumb.unlink()
                                     logger.debug(f"删除重复封面图: {other_thumb.name}")
                                 except Exception as e:
-                                    logger.debug(f"删除封面图失败: {other_thumb.name}, {str(e)}")
+                                    logger.debug(
+                                        f"删除封面图失败: {other_thumb.name}, {str(e)}"
+                                    )
                         break
                     else:
                         # 非JPG格式，转换并保存为 cover.jpg
@@ -275,15 +291,21 @@ class YouTubeDownloader:
                                     thumb.unlink()
                                     logger.debug(f"删除原封面图: {thumb.name}")
                                 except Exception as e:
-                                    logger.debug(f"删除原封面图失败: {thumb.name}, {str(e)}")
+                                    logger.debug(
+                                        f"删除原封面图失败: {thumb.name}, {str(e)}"
+                                    )
                                 # 删除其他封面图
                                 for other_thumb in found_thumbnails:
                                     if other_thumb != thumb and other_thumb.exists():
                                         try:
                                             other_thumb.unlink()
-                                            logger.debug(f"删除其他封面图: {other_thumb.name}")
+                                            logger.debug(
+                                                f"删除其他封面图: {other_thumb.name}"
+                                            )
                                         except Exception as e:
-                                            logger.debug(f"删除封面图失败: {other_thumb.name}, {str(e)}")
+                                            logger.debug(
+                                                f"删除封面图失败: {other_thumb.name}, {str(e)}"
+                                            )
                                 break
                             except Exception as e:
                                 logger.error(f"转换封面图失败: {thumb.name}, {str(e)}")
@@ -335,7 +357,9 @@ class YouTubeDownloader:
                     # 查找下载的文件
                     return self._find_downloaded_file(info, ydl_opts["outtmpl"])
                 else:
-                    logger.warning(f"视频文件过大，跳过下载: {info.get('title', 'Unknown')}")
+                    logger.warning(
+                        f"视频文件过大，跳过下载: {info.get('title', 'Unknown')}"
+                    )
                     return None
 
         except Exception as e:
@@ -387,25 +411,29 @@ class YouTubeDownloader:
 
             if isinstance(template, dict):
                 # 如果是字典格式，尝试从 'default' 键获取模板
-                default_template = template.get('default', '')
+                default_template = template.get("default", "")
                 if default_template:
                     # 提取文件夹路径
                     import re
-                    match = re.match(r'^(.+[\\/])[^\\/]*\.\%\(', default_template)
+
+                    match = re.match(r"^(.+[\\/])[^\\/]*\.\%\(", default_template)
                     if match:
                         video_folder = Path(match.group(1))
             elif isinstance(template, str):
                 # 如果是字符串格式
                 import re
-                match = re.match(r'^(.+[\\/])[^\\/]*\.\%\(', template)
+
+                match = re.match(r"^(.+[\\/])[^\\/]*\.\%\(", template)
                 if match:
                     video_folder = Path(match.group(1))
 
             # 如果无法从 template 提取，从 info 中构建文件夹路径
             if video_folder is None:
                 video_id = info.get("id", "")
-                channel_title = self._sanitize_filename(info.get("uploader", "") or info.get("channel", ""))
-                video_folder = self.download_path / f"{channel_title}_{video_id}"
+                channel_title = self._sanitize_filename(
+                    info.get("uploader", "") or info.get("channel", "")
+                )
+                video_folder = self.download_path / f"{channel_title}|{video_id}"
 
             if not video_folder.exists():
                 logger.error(f"视频文件夹不存在: {video_folder}")
@@ -440,6 +468,7 @@ class YouTubeDownloader:
         except Exception as e:
             logger.error(f"查找下载文件失败: {str(e)}")
             import traceback
+
             logger.error(traceback.format_exc())
             return None
 
@@ -540,5 +569,7 @@ class YouTubeDownloader:
             thumbnail_url=info.get("thumbnail"),
             tags=info.get("tags", []),
             language=info.get("language", "en"),
-            category_id=str(info.get("categories", [""])[0]) if info.get("categories") else None,
+            category_id=str(info.get("categories", [""])[0])
+            if info.get("categories")
+            else None,
         )

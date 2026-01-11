@@ -2,13 +2,12 @@
 
 import asyncio
 import re
-from pathlib import Path
-from typing import Optional, List, Dict, Any, Tuple
 import tempfile
-import json
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
-from ..utils.logger import logger
 from ..utils.config import settings
+from ..utils.logger import logger
 
 
 class SubtitleProcessor:
@@ -152,66 +151,31 @@ class SubtitleProcessor:
             logger.error(f"字幕格式转换异常: {str(e)}")
             return None
 
-    async def embed_subtitles_to_video(
-        self, video_path: Path, subtitle_path: Path
-    ) -> Optional[Path]:
-        """将字幕嵌入视频"""
-        try:
-            logger.info(f"开始嵌入字幕到视频: {video_path}")
-
-            output_path = self.temp_dir / f"with_subs_{video_path.stem}.mp4"
-
-            cmd = [
-                "ffmpeg",
-                "-i",
-                str(video_path),
-                "-i",
-                str(subtitle_path),
-                "-c",
-                "copy",
-                "-c:s",
-                "mov_text",  # 使用mov_text编码器
-                "-metadata:s:s:0",
-                "language=chi",  # 设置字幕语言为中文
-                "-disposition:s:0",
-                "default",  # 设置为默认字幕
-                "-y",  # 覆盖输出文件
-                str(output_path),
-            ]
-
-            process = await asyncio.create_subprocess_exec(
-                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-            )
-
-            stdout, stderr = await process.communicate()
-
-            if process.returncode == 0 and output_path.exists():
-                logger.info(f"字幕嵌入完成: {output_path}")
-                return output_path
-            else:
-                logger.error(f"字幕嵌入失败: {stderr.decode('utf-8')}")
-                return None
-
-        except Exception as e:
-            logger.error(f"字幕嵌入异常: {str(e)}")
-            return None
-
     async def parse_srt_subtitle(self, subtitle_path: Path) -> List[Dict[str, Any]]:
-        """解析SRT字幕文件"""
+        """解析SRT字幕文件
+
+        处理字幕文本中的多行内容，在时间戳下的多行文本会被合并成一行。
+        """
         try:
             content = subtitle_path.read_text(encoding="utf-8")
             subtitles = []
 
-            # SRT格式解析
-            pattern = r"(\d+)\s*\n([\d:,]+)\s*-->\s*([\d:,]+)\s*\n(.+?)(?=\n\d+|\Z)"
-            matches = re.findall(pattern, content, re.DOTALL)
+            # SRT格式解析 - 使用 [\s\S]+? 来匹配包括换行符在内的所有字符
+            # 匹配: 序号 \n 时间戳 \n 文本内容(可能多行) \n (下一个序号或文件结束)
+            pattern = r"(\d+)\s*\n([\d:,]+)\s*-->\s*([\d:,]+)\s*\n([\s\S]+?)(?=\n\s*\d+\s*\n|$)"
+            matches = re.findall(pattern, content)
 
             for match in matches:
+                # 将文本中的换行符替换为空格，合并多行文本
+                text = match[3].strip()
+                # 将连续的换行符和空格规范化为单个空格
+                text = re.sub(r"\s+", " ", text)
+
                 subtitle_entry = {
                     "index": int(match[0]),
                     "start": match[1],
                     "end": match[2],
-                    "text": match[3].strip().replace("\n", " "),
+                    "text": text,
                 }
                 subtitles.append(subtitle_entry)
 
@@ -313,7 +277,7 @@ class SubtitleProcessor:
         - 使用第一行的开始时间
         - 使用第二行的结束时间
         - 文本内容合并，中间用空格分隔
-        - 如果第一行中文字符>20，则不合并，作为单独一行
+        - 如果合并后的单词数>15，则不合并，作为单独一行
 
         Args:
             srt_path: SRT字幕文件路径
@@ -327,7 +291,7 @@ class SubtitleProcessor:
             # 解析字幕
             subtitles = self._parse_srt_file(srt_path)
 
-            # 每两行合并为一行，但检查中文字符数
+            # 每两行合并为一行，但检查单词数
             merged_subtitles = []
             i = 0
             while i < len(subtitles):
@@ -336,14 +300,16 @@ class SubtitleProcessor:
                     sub1 = subtitles[i]
                     sub2 = subtitles[i + 1]
 
-                    # 计算第一行的中文字符数
-                    zh_char_count = self._count_chinese_characters(sub1["text"])
+                    # 计算合并后的单词数
+                    merged_text = f"{sub1['text']} {sub2['text']}"
+                    word_count = self._count_words(merged_text)
 
-                    if zh_char_count > 20:
-                        # 第一行中文字符过多，不合并
+                    if word_count > 15:
+                        # 合并后单词数过多，不合并
                         logger.debug(
-                            f"第一行中文字符过多({zh_char_count}个)，不合并字幕{i + 1}"
+                            f"合并后单词数过多({word_count}个)，不合并字幕{i + 1}和{i + 2}"
                         )
+                        # 添加第一行
                         merged_sub = {
                             "index": len(merged_subtitles) + 1,
                             "start": sub1["start"],
@@ -351,6 +317,7 @@ class SubtitleProcessor:
                             "text": sub1["text"],
                         }
                         merged_subtitles.append(merged_sub)
+                        # 下一轮将处理第二行
                         i += 1
                     else:
                         # 正常合并两行
@@ -358,11 +325,11 @@ class SubtitleProcessor:
                             "index": len(merged_subtitles) + 1,
                             "start": sub1["start"],
                             "end": sub2["end"],
-                            "text": f"{sub1['text']} {sub2['text']}",
+                            "text": merged_text,
                         }
                         merged_subtitles.append(merged_sub)
                         logger.debug(
-                            f"合并: 字幕{i + 1}和{i + 2} -> 字幕{len(merged_subtitles)}"
+                            f"合并: 字幕{i + 1}和{i + 2} -> 字幕{len(merged_subtitles)} ({word_count}个单词)"
                         )
                         i += 2
                 else:
@@ -393,21 +360,18 @@ class SubtitleProcessor:
             logger.error(f"合并字幕行失败: {str(e)}")
             raise
 
-    def _count_chinese_characters(self, text: str) -> int:
-        """计算文本中的中文字符数量
+    def _count_words(self, text: str) -> int:
+        """计算文本中的单词数量（按空格分割）
 
         Args:
             text: 待统计的文本
 
         Returns:
-            中文字符数量
+            单词数量
         """
-        count = 0
-        for char in text:
-            # 判断是否为中文字符（Unicode 范围）
-            if "\u4e00" <= char <= "\u9fff":
-                count += 1
-        return count
+        # 使用正则表达式分割单词，处理连续空格和标点符号
+        words = re.findall(r"\b[\w-]+\b", text)
+        return len(words)
 
     def _write_srt_file(
         self, subtitles: List[Dict[str, Any]], output_path: Path
@@ -605,7 +569,7 @@ class SubtitleProcessor:
                     )
 
                 # 重建 SRT 文件
-                logger.info(f"步骤 4/4: 重建字幕文件...")
+                logger.info("步骤 4/4: 重建字幕文件...")
                 final_content = self._rebuild_srt_from_batches(
                     subtitles, all_translated_texts
                 )
@@ -669,11 +633,16 @@ class SubtitleProcessor:
     def _format_subtitles_for_translation_batch(
         self, subtitles: List[Dict[str, Any]], offset: int
     ) -> str:
-        """格式化字幕批次用于翻译"""
+        """格式化字幕批次用于翻译
+
+        将字幕文本中的多行内容合并成一行，确保翻译时格式正确。
+        """
         lines = []
         for i, sub in enumerate(subtitles):
             seq_num = offset + i + 1
-            lines.append(f"{seq_num}: {sub['text']}")
+            # 将多行文本合并成一行，使用正则表达式将连续空白字符替换为单个空格
+            text = re.sub(r"\s+", " ", sub["text"].strip())
+            lines.append(f"{seq_num}: {text}")
         return "\n".join(lines)
 
     def _parse_translated_batch_result(
@@ -1089,7 +1058,7 @@ class SubtitleProcessor:
                 plain_text, output_path, subtitle_folder=subtitle_path.parent
             )
 
-            logger.info(f"视频简介生成完成")
+            logger.info("视频简介生成完成")
             return description_path
 
         except Exception as e:
@@ -1313,23 +1282,47 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     subtitle_path, en_font_size=32, zh_font_size=56
                 )
 
-            # 使用FFmpeg嵌入字幕（ASS格式）
+            # 使用FFmpeg嵌入字幕（ASS格式）- 支持GPU加速
             # 需要转义路径中的特殊字符
             escaped_subtitle_path = (
                 str(subtitle_path).replace("\\", "\\\\\\\\").replace(":", "\\\\:")
             )
 
-            cmd = [
-                "ffmpeg",
-                "-i",
-                str(video_path),
-                "-vf",
-                f"ass='{escaped_subtitle_path}'",
-                "-c:a",
-                "copy",  # 音频直接复制，不重新编码
-                "-y",  # 覆盖输出文件
-                str(output_path),
-            ]
+            # 获取硬件编码器配置
+            hwaccel_config = self._get_hwaccel_config()
+            encoder = hwaccel_config["encoder"]
+            hwaccel_args = hwaccel_config["args"]
+            accel_type = hwaccel_config["type"]
+
+            if accel_type != "none":
+                logger.info(f"使用硬件加速: {accel_type} ({encoder})")
+
+            # 构建视频滤镜（VAAPI需要特殊处理）
+            if accel_type == "vaapi":
+                # VAAPI需要硬件上传和格式转换
+                video_filter = f"hwupload,format=nv12|vaapi,hwdownload,format=nv12,ass='{escaped_subtitle_path}'"
+            else:
+                video_filter = f"ass='{escaped_subtitle_path}'"
+
+            # 构建FFmpeg命令
+            cmd = ["ffmpeg"]
+            cmd.extend(hwaccel_args)
+            cmd.extend(
+                [
+                    "-i",
+                    str(video_path),
+                    "-vf",
+                    video_filter,
+                    "-c:a",
+                    "copy",  # 音频直接复制，不重新编码
+                    "-c:v",
+                    encoder,
+                    "-preset",
+                    settings.ffmpeg_preset,
+                    "-y",  # 覆盖输出文件
+                    str(output_path),
+                ]
+            )
 
             process = await asyncio.create_subprocess_exec(
                 *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
@@ -1350,3 +1343,101 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         except Exception as e:
             logger.error(f"字幕嵌入异常: {str(e)}")
             raise
+
+    def _get_hwaccel_config(self) -> dict:
+        """获取硬件加速配置
+
+        Returns:
+            包含编码器、硬件加速参数和类型的字典
+        """
+        hwaccel = settings.ffmpeg_hwaccel.lower()
+
+        # 如果设置为none，使用软件编码
+        if hwaccel == "none":
+            return {"encoder": "libx264", "args": [], "type": "none"}
+
+        # 如果指定了特定硬件加速器
+        if hwaccel != "auto":
+            return self._get_specific_encoder(hwaccel)
+
+        # 自动检测可用的硬件加速器
+        return self._detect_hwaccel()
+
+    def _get_specific_encoder(self, hwaccel: str) -> dict:
+        """获取指定的硬件编码器配置
+
+        Args:
+            hwaccel: 硬件加速类型 (nvenc, qsv, amf, videotoolbox, vaapi)
+
+        Returns:
+            包含编码器、硬件加速参数和类型的字典
+        """
+        configs = {
+            "nvenc": {"encoder": "h264_nvenc", "args": [], "type": "nvenc"},
+            "qsv": {
+                "encoder": "h264_qsv",
+                "args": ["-init_hw_device", "qsv=qsv", "-filter_hw_device", "qsv"],
+                "type": "qsv",
+            },
+            "amf": {"encoder": "h264_amf", "args": [], "type": "amf"},
+            "videotoolbox": {
+                "encoder": "h264_videotoolbox",
+                "args": [],
+                "type": "videotoolbox",
+            },
+            "vaapi": {
+                "encoder": "h264_vaapi",
+                "args": ["-vaapi_device", "/dev/dri/renderD128"],
+                "type": "vaapi",
+            },
+        }
+
+        if hwaccel in configs:
+            return configs[hwaccel]
+
+        # 如果指定了无效的加速器，回退到软件编码
+        logger.warning(f"未知的硬件加速类型: {hwaccel}，使用软件编码")
+        return {"encoder": "libx264", "args": [], "type": "none"}
+
+    def _detect_hwaccel(self) -> dict:
+        """自动检测可用的硬件加速器
+
+        Returns:
+            包含编码器、硬件加速参数和类型的字典
+        """
+        import subprocess
+
+        # 检测优先级：nvenc > qsv > amf > videotoolbox > vaapi
+        detection_order = [
+            ("nvenc", ["ffmpeg", "-hide_banner", "-encoders"]),
+            ("qsv", ["ffmpeg", "-hide_banner", "-encoders"]),
+            ("amf", ["ffmpeg", "-hide_banner", "-encoders"]),
+            ("videotoolbox", ["ffmpeg", "-hide_banner", "-encoders"]),
+            ("vaapi", ["ffmpeg", "-hide_banner", "-encoders"]),
+        ]
+
+        encoder_names = {
+            "nvenc": "h264_nvenc",
+            "qsv": "h264_qsv",
+            "amf": "h264_amf",
+            "videotoolbox": "h264_videotoolbox",
+            "vaapi": "h264_vaapi",
+        }
+
+        for accel_type, cmd in detection_order:
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+                if encoder_names[accel_type] in result.stdout:
+                    logger.info(f"检测到硬件加速器: {accel_type}")
+                    return self._get_specific_encoder(accel_type)
+            except (
+                subprocess.TimeoutExpired,
+                FileNotFoundError,
+                subprocess.CalledProcessError,
+                OSError,
+            ):
+                continue
+
+        # 未检测到任何硬件加速器，使用软件编码
+        logger.info("未检测到可用的硬件加速器，使用软件编码 (libx264)")
+        return {"encoder": "libx264", "args": [], "type": "none"}

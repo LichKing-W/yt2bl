@@ -64,7 +64,7 @@ class BilibiliContentOptimizer:
             video_folder = video_path_obj.parent
 
             # 从文件夹名称中提取YouTuber名称
-            # 文件夹格式: {YouTuber名}_{video_id}
+            # 文件夹格式: {YouTuber名}|{video_id}
             youtuber_name = self._extract_youtuber_name_from_folder(video_folder)
 
             # 查找封面图
@@ -83,11 +83,15 @@ class BilibiliContentOptimizer:
                 description = self.optimize_description(youtube_video)
                 logger.info("使用默认描述")
 
-            # 优化标题（添加YouTuber名称）
-            optimized_title = self.optimize_title(youtube_video.title, youtuber_name)
+            # 使用LLM生成中文标题
+            optimized_title = await self.generate_optimized_title(
+                youtube_video.title, youtuber_name, description
+            )
 
             # 生成标签（包含YouTuber名称，使用LLM生成）
-            optimized_tags = await self.generate_tags(youtube_video, youtuber_name, description)
+            optimized_tags = await self.generate_tags(
+                youtube_video, youtuber_name, description
+            )
 
             # 确定分类
             category_id = self.determine_category(youtube_video)
@@ -168,14 +172,14 @@ class BilibiliContentOptimizer:
             YouTuber名称，未找到返回None
         """
         try:
-            # 文件夹格式: {YouTuber名}_{video_id}
+            # 文件夹格式: {YouTuber名}|{video_id}
             folder_name = video_folder.name
 
-            # 查找最后一个下划线（video_id前）
-            last_underscore = folder_name.rfind("_")
-            if last_underscore > 0:
-                # 提取YouTuber名称（下划线之前的部分）
-                youtuber_name = folder_name[:last_underscore]
+            # 查找竖线分隔符（video_id前）
+            last_separator = folder_name.rfind("|")
+            if last_separator > 0:
+                # 提取YouTuber名称（竖线之前的部分）
+                youtuber_name = folder_name[:last_separator]
                 # 将下划线替换回空格（如果有）
                 youtuber_name = youtuber_name.replace("_", " ")
                 logger.info(f"从文件夹名提取YouTuber: {youtuber_name}")
@@ -209,7 +213,9 @@ class BilibiliContentOptimizer:
             logger.debug(f"读取视频简介文件失败: {str(e)}")
             return None
 
-    def optimize_title(self, original_title: str, youtuber_name: Optional[str] = None) -> str:
+    def optimize_title(
+        self, original_title: str, youtuber_name: Optional[str] = None
+    ) -> str:
         """优化标题
 
         Args:
@@ -238,7 +244,7 @@ class BilibiliContentOptimizer:
                     suffix = f" | {youtuber_name}"
                     available_length = 80 - len(suffix)
                     if available_length > 10:
-                        title = title[:available_length - 3] + "..." + suffix
+                        title = title[: available_length - 3] + "..." + suffix
                     else:
                         # 如果原标题太长，只能截断
                         title = title[:77] + "..."
@@ -249,6 +255,199 @@ class BilibiliContentOptimizer:
 
         except Exception:
             return original_title
+
+    async def generate_optimized_title(
+        self,
+        original_title: str,
+        youtuber_name: Optional[str] = None,
+        description: Optional[str] = None,
+    ) -> str:
+        """使用LLM生成优化的中文标题
+
+        Args:
+            original_title: YouTube原始标题
+            youtuber_name: YouTuber名称
+            description: 视频简介内容
+
+        Returns:
+            优化后的中文标题，格式为 "中文标题 | YouTuber名"
+        """
+        try:
+            # 如果有简介，使用LLM生成中文标题
+            if description:
+                try:
+                    chinese_title = await self.generate_title_with_llm(
+                        original_title, description
+                    )
+                    if chinese_title:
+                        # 添加YouTuber名称
+                        if youtuber_name:
+                            return f"{chinese_title} | {youtuber_name}"
+                        return chinese_title
+                except Exception as e:
+                    logger.warning(f"LLM标题生成失败，使用原标题: {str(e)}")
+
+            # 回退到原标题优化
+            return self.optimize_title(original_title, youtuber_name)
+
+        except Exception:
+            return self.optimize_title(original_title, youtuber_name)
+
+    async def generate_title_with_llm(
+        self, original_title: str, video_description: str
+    ) -> Optional[str]:
+        """使用LLM根据原始标题和视频简介生成中文标题
+
+        Args:
+            original_title: YouTube原始标题
+            video_description: 视频简介内容
+
+        Returns:
+            生成的中文标题，失败返回None
+        """
+        try:
+            # 检查API密钥
+            api_key = settings.openai_api_key
+            if not api_key:
+                logger.warning("未设置OPENAI_API_KEY，跳过LLM标题生成")
+                return None
+
+            # 获取base_url（可选）
+            base_url = settings.openai_base_url
+
+            # 获取模型配置
+            model = settings.openai_model
+
+            # 读取prompt模板
+            project_root = Path(__file__).parent.parent.parent
+            prompt_path = project_root / "prompts" / "generate_title.md"
+            if not prompt_path.exists():
+                logger.error(f"Prompt文件不存在: {prompt_path}")
+                return None
+
+            prompt_template = prompt_path.read_text(encoding="utf-8")
+
+            # 调用LLM生成标题
+            title_text = await self._call_llm_for_title(
+                prompt_template,
+                original_title,
+                video_description,
+                api_key,
+                base_url,
+                model,
+            )
+
+            # 解析并验证返回的标题
+            title = self._parse_llm_title(title_text)
+
+            if title:
+                logger.info(f"LLM生成标题成功: {title}")
+            else:
+                logger.warning("LLM未生成有效标题")
+
+            return title
+
+        except Exception as e:
+            logger.error(f"LLM标题生成失败: {str(e)}")
+            return None
+
+    async def _call_llm_for_title(
+        self,
+        prompt_template: str,
+        original_title: str,
+        description: str,
+        api_key: str,
+        base_url: Optional[str] = None,
+        model: str = "gpt-4o-mini",
+    ) -> str:
+        """调用LLM生成标题"""
+        try:
+            import openai
+
+            # 构建客户端参数
+            client_kwargs = {"api_key": api_key}
+            if base_url:
+                client_kwargs["base_url"] = base_url
+                logger.info(f"使用自定义API端点: {base_url}")
+
+            client = openai.AsyncOpenAI(**client_kwargs)
+
+            # 构建用户输入
+            user_input = f"""原始标题：{original_title}
+视频简介：
+{description}"""
+
+            # 调用API
+            response = await client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": prompt_template},
+                    {"role": "user", "content": user_input},
+                ],
+                temperature=0.7,
+                max_tokens=100,
+            )
+
+            # 获取结果
+            result = response.choices[0].message.content.strip()
+
+            # 记录模型原始输出（用于调试）
+            logger.debug(f"[LLM标题生成原始输出]\n{result}\n[/LLM标题生成原始输出]")
+
+            return result
+
+        except ImportError:
+            logger.error("未安装openai库，请运行: pip install openai")
+            raise
+        except Exception as e:
+            logger.error(f"LLM API调用失败: {str(e)}")
+            raise
+
+    def _parse_llm_title(self, title_text: str) -> Optional[str]:
+        """解析LLM返回的标题文本
+
+        Args:
+            title_text: LLM返回的标题文本
+
+        Returns:
+            解析后的标题，无效返回None
+        """
+        try:
+            # 按行分割，取第一个非空行
+            lines = title_text.split("\n")
+
+            for line in lines:
+                line = line.strip()
+
+                # 跳过空行
+                if not line:
+                    continue
+
+                # 跳过说明性文字
+                if (
+                    line.startswith("#")
+                    or line.startswith("以下是")
+                    or line.startswith("标题")
+                ):
+                    continue
+
+                # 移除可能的引号或markdown符号
+                line = line.strip("`'*\"")
+
+                # 检查标题长度（15-30个汉字，不超过80字符）
+                if 10 <= len(line) <= 80:
+                    return line
+
+                # 如果长度合理但偏短，也接受
+                if 5 <= len(line) < 10:
+                    logger.warning(f"LLM生成的标题偏短: {line}")
+                    return line
+
+            return None
+
+        except Exception as e:
+            logger.debug(f"解析LLM标题失败: {str(e)}")
+            return None
 
     def optimize_description(self, youtube_video: YouTubeVideo) -> str:
         """优化描述"""
@@ -299,7 +498,10 @@ class BilibiliContentOptimizer:
             return youtube_video.description
 
     async def generate_tags(
-        self, youtube_video: YouTubeVideo, youtuber_name: Optional[str] = None, description: Optional[str] = None
+        self,
+        youtube_video: YouTubeVideo,
+        youtuber_name: Optional[str] = None,
+        description: Optional[str] = None,
     ) -> List[str]:
         """生成标签
 
@@ -469,8 +671,12 @@ class BilibiliContentOptimizer:
             return []
 
     async def _call_llm_for_tags(
-        self, prompt_template: str, description: str, api_key: str,
-        base_url: Optional[str] = None, model: str = "gpt-4o-mini"
+        self,
+        prompt_template: str,
+        description: str,
+        api_key: str,
+        base_url: Optional[str] = None,
+        model: str = "gpt-4o-mini",
     ) -> str:
         """调用LLM生成标签"""
         try:
@@ -489,7 +695,7 @@ class BilibiliContentOptimizer:
                 model=model,
                 messages=[
                     {"role": "system", "content": prompt_template},
-                    {"role": "user", "content": description}
+                    {"role": "user", "content": description},
                 ],
                 temperature=0.5,
                 max_tokens=200,
@@ -533,7 +739,11 @@ class BilibiliContentOptimizer:
                     continue
 
                 # 跳过说明性文字
-                if line.startswith("#") or line.startswith("以下是") or line.startswith("标签"):
+                if (
+                    line.startswith("#")
+                    or line.startswith("以下是")
+                    or line.startswith("标签")
+                ):
                     continue
 
                 # 移除可能的序号前缀（如 "1. " 或 "1: "）

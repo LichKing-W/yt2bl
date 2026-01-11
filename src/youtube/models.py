@@ -40,15 +40,16 @@ class YouTubeVideo:
 
     @property
     def folder_name(self) -> str:
-        """获取视频文件夹名称 (格式: {作者名}_{视频ID})"""
+        """获取视频文件夹名称 (格式: {作者名}|{视频ID})"""
         # 清理作者名中的非法字符
         safe_author = self._sanitize_for_folder(self.channel_title)
-        return f"{safe_author}_{self.video_id}"
+        return f"{safe_author}|{self.video_id}"
 
     def _sanitize_for_folder(self, name: str) -> str:
         """清理文件夹名称，移除非法字符"""
-        # 移除或替换非法字符（文件夹名中不能有 / \\ : * ? " < > |）
-        illegal_chars = '/\\:*?"<>|'
+        # 移除或替换非法字符（文件夹名中不能有 / \\ : * ? " < >）
+        # 注意：保留 | 作为分隔符，所以不在替换列表中
+        illegal_chars = '/\\:*?"<>'
         for char in illegal_chars:
             name = name.replace(char, "_")
 

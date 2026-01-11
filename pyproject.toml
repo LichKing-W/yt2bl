@@ -17,6 +17,7 @@ dependencies = [
     "aiofiles>=23.0.0",
     "openai>=2.14.0",
     "bilibili-api-python>=17.4.1",
+    "ruff>=0.14.9",
 ]
 
 [project.optional-dependencies]
