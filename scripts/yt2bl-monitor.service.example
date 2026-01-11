@@ -1,0 +1,50 @@
+# YouTube订阅监控 - systemd服务文件
+#
+# 安装说明：
+# 1. 复制此文件到 /etc/systemd/system/
+#    sudo cp yt2bl-monitor.service.example /etc/systemd/system/yt2bl-monitor.service
+# 2. 修改文件中的路径（User、WorkingDirectory、ExecStart）
+#    sudo vim /etc/systemd/system/yt2bl-monitor.service
+# 3. 重载systemd配置
+#    sudo systemctl daemon-reload
+# 4. 启动服务
+#    sudo systemctl start yt2bl-monitor
+# 5. 设置开机自启
+#    sudo systemctl enable yt2bl-monitor
+# 6. 查看状态
+#    sudo systemctl status yt2bl-monitor
+# 7. 查看日志
+#    sudo journalctl -u yt2bl-monitor -f
+
+[Unit]
+Description=YouTube Subscription Monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 替换为你的用户名
+User=your_username
+# 替换为项目路径
+WorkingDirectory=/path/to/yt2bl
+# 替换为虚拟环境的python路径（如果使用虚拟环境）
+# ExecStart=/path/to/yt2bl/.venv/bin/python -m src.subscription_monitor run
+ExecStart=/usr/bin/python3 -m src.subscription_monitor run
+
+# 环境变量（可选，也可以使用.env文件）
+# Environment="YOUTUBE_COOKIES_FILE=/path/to/cookies.txt"
+# Environment="BILIBILI_SESSDATA=your_sessdata"
+# Environment="BILIBILI_BILI_JCT=your_bili_jct"
+# Environment="BILIBILI_DedeUserID=your_dedeuserid"
+
+# 重启策略
+Restart=always
+RestartSec=60
+
+# 日志
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=yt2bl-monitor
+
+[Install]
+WantedBy=multi-user.target
