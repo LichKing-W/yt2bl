@@ -1279,7 +1279,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             if subtitle_path.suffix.lower() == ".srt":
                 logger.info("检测到SRT格式字幕，转换为ASS格式以支持双语字号")
                 subtitle_path = self.convert_srt_to_ass(
-                    subtitle_path, en_font_size=32, zh_font_size=56
+                    subtitle_path, en_font_size=36, zh_font_size=60
                 )
 
             # 使用FFmpeg嵌入字幕（ASS格式）- 支持GPU加速
