@@ -841,7 +841,7 @@ class SubtitleProcessor:
                 temperature=0.3,
                 max_tokens=8192,  # 增加token限制以支持完整字幕文件
             )
-            logger.info(response)
+            # logger.info(response)
 
             # 获取翻译结果
             translated_text = response.choices[0].message.content.strip()
@@ -1282,60 +1282,72 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     subtitle_path, en_font_size=36, zh_font_size=60
                 )
 
-            # 使用FFmpeg嵌入字幕（ASS格式）- 支持GPU加速
-            # 需要转义路径中的特殊字符
-            escaped_subtitle_path = (
-                str(subtitle_path).replace("\\", "\\\\\\\\").replace(":", "\\\\:")
-            )
+            # 创建不含特殊字符的临时字幕文件路径
+            # 解决 FFmpeg ass 滤镜无法正确处理路径中特殊字符（如单引号）的问题
+            import tempfile
+            import shutil
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.ass', delete=False) as tmp:
+                temp_subtitle_path = Path(tmp.name)
+            # 复制字幕内容到临时文件
+            shutil.copy(subtitle_path, temp_subtitle_path)
+            logger.info(f"创建临时字幕文件: {temp_subtitle_path}")
+            try:
+                # 使用临时文件路径（不含特殊字符）
+                subtitle_path_arg = str(temp_subtitle_path)
 
-            # 获取硬件编码器配置
-            hwaccel_config = self._get_hwaccel_config()
-            encoder = hwaccel_config["encoder"]
-            hwaccel_args = hwaccel_config["args"]
-            accel_type = hwaccel_config["type"]
+                # 获取硬件编码器配置
+                hwaccel_config = self._get_hwaccel_config()
+                encoder = hwaccel_config["encoder"]
+                hwaccel_args = hwaccel_config["args"]
+                accel_type = hwaccel_config["type"]
 
-            if accel_type != "none":
-                logger.info(f"使用硬件加速: {accel_type} ({encoder})")
+                if accel_type != "none":
+                    logger.info(f"使用硬件加速: {accel_type} ({encoder})")
 
-            # 构建视频滤镜（VAAPI需要特殊处理）
-            if accel_type == "vaapi":
-                # VAAPI需要硬件上传和格式转换
-                video_filter = f"hwupload,format=nv12|vaapi,hwdownload,format=nv12,ass='{escaped_subtitle_path}'"
-            else:
-                video_filter = f"ass='{escaped_subtitle_path}'"
+                # 构建视频滤镜（VAAPI需要特殊处理）
+                if accel_type == "vaapi":
+                    # VAAPI需要硬件上传和格式转换
+                    video_filter = f"hwupload,format=nv12|vaapi,hwdownload,format=nv12,ass={subtitle_path_arg}"
+                else:
+                    video_filter = f"ass={subtitle_path_arg}"
 
-            # 构建FFmpeg命令
-            cmd = ["ffmpeg"]
-            cmd.extend(hwaccel_args)
-            cmd.extend(
-                [
-                    "-i",
-                    str(video_path),
-                    "-vf",
-                    video_filter,
-                    "-c:a",
-                    "copy",  # 音频直接复制，不重新编码
-                    "-c:v",
-                    encoder,
-                    "-preset",
-                    settings.ffmpeg_preset,
-                    "-y",  # 覆盖输出文件
-                    str(output_path),
-                ]
-            )
+                # 构建FFmpeg命令
+                cmd = ["ffmpeg"]
+                cmd.extend(hwaccel_args)
+                cmd.extend(
+                    [
+                        "-i",
+                        str(video_path),
+                        "-vf",
+                        video_filter,
+                        "-c:a",
+                        "copy",  # 音频直接复制，不重新编码
+                        "-c:v",
+                        encoder,
+                        "-preset",
+                        settings.ffmpeg_preset,
+                        "-y",  # 覆盖输出文件
+                        str(output_path),
+                    ]
+                )
 
-            process = await asyncio.create_subprocess_exec(
-                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-            )
+                process = await asyncio.create_subprocess_exec(
+                    *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                )
 
-            stdout, stderr = await process.communicate()
+                stdout, stderr = await process.communicate()
 
-            if process.returncode == 0 and output_path.exists():
-                logger.info(f"字幕嵌入成功: {output_path.name}")
-                return output_path
-            else:
-                logger.error(f"字幕嵌入失败: {stderr.decode('utf-8', errors='ignore')}")
-                raise RuntimeError("FFmpeg字幕嵌入失败")
+                if process.returncode == 0 and output_path.exists():
+                    logger.info(f"字幕嵌入成功: {output_path.name}")
+                    return output_path
+                else:
+                    logger.error(f"字幕嵌入失败: {stderr.decode('utf-8', errors='ignore')}")
+                    raise RuntimeError("FFmpeg字幕嵌入失败")
+            finally:
+                # 清理临时字幕文件
+                if 'temp_subtitle_path' in locals() and temp_subtitle_path.exists():
+                    temp_subtitle_path.unlink()
+                    logger.info(f"已删除临时字幕文件: {temp_subtitle_path.name}")
 
         except FileNotFoundError:
             logger.error("未找到FFmpeg，请确保已安装FFmpeg并添加到PATH环境变量")

@@ -160,6 +160,41 @@ class YouTubeToBilibili:
         else:
             logger.debug(f"视频已在历史记录中: {video_id}")
 
+    def _cleanup_data_folder(self, max_folders: int = 10) -> None:
+        """清理 data 文件夹，当视频文件夹数量超过 max_folders 时删除所有
+
+        Args:
+            max_folders: 触发清理的最大文件夹数量，默认 10
+        """
+        from .utils.config import settings
+
+        data_path = Path(settings.download_path)
+        if not data_path.exists():
+            return
+
+        # 获取所有视频文件夹（格式: {YouTuber名}|{video_id}）
+        video_folders = [
+            f for f in data_path.iterdir()
+            if f.is_dir() and '|' in f.name
+        ]
+
+        if len(video_folders) <= max_folders:
+            logger.debug(f"视频文件夹数量 ({len(video_folders)}) 未超过限制 ({max_folders})，无需清理")
+            return
+
+        # 超过限制，删除所有视频文件夹
+        self.console.print(f"\n🗑️  视频文件夹数量 ({len(video_folders)}) 超过限制 ({max_folders})，开始清理...", style="yellow")
+
+        for folder in video_folders:
+            try:
+                import shutil
+                shutil.rmtree(folder)
+                logger.info(f"已删除视频文件夹: {folder.name}")
+            except Exception as e:
+                logger.error(f"删除文件夹失败 {folder.name}: {e}")
+
+        self.console.print(f"✅ 已清理所有视频文件夹 ({len(video_folders)} 个)", style="green")
+
     async def search_and_download(self, max_videos: int = 10) -> List[YouTubeVideo]:
         """搜索并下载视频"""
         try:
@@ -1518,6 +1553,9 @@ class YouTubeToBilibili:
 
                 # 添加到订阅历史记录
                 self._add_to_subscription_history(video.video_id)
+
+                # 清理 data 文件夹
+                self._cleanup_data_folder()
             else:
                 self.console.print(f"❌ 上传失败: {result.message}", style="red")
                 self.console.print("\n❌ 工作流执行失败", style="red")
