@@ -41,9 +41,14 @@ ExecStart=/usr/bin/python3 -m src.subscription_monitor run
 Restart=always
 RestartSec=60
 
-# 日志
-StandardOutput=journal
-StandardError=journal
+# 日志设置
+# 日志由程序内部通过 src/utils/logger.py 统一管理（logs/app.log）
+# 可选：丢弃标准输出以避免重复（推荐）
+StandardOutput=null
+StandardError=null
+# 或者：保留 journal 日志以使用 journalctl 查看（systemd 会自动轮转）
+# StandardOutput=journal
+# StandardError=journal
 SyslogIdentifier=yt2bl-monitor
 
 [Install]

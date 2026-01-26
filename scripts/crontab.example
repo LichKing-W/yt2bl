@@ -14,18 +14,23 @@
 # Python 脚本会自动读取 .env 中的代理配置并应用到所有 YouTube 请求
 # 无需在这里设置 HTTP_PROXY/HTTPS_PROXY 环境变量
 
+# ========== 日志设置说明 ==========
+# 日志由程序内部通过 src/utils/logger.py 统一管理
+# 输出文件：logs/app.log（在 .env 中配置 LOG_FILE）
+# 无需在此重定向到 cron.log，直接丢弃标准输出避免重复
+
 # ========== 定时任务 ==========
 # 每小时运行一次（整点）
-0 * * * * source /path/to/yt2bl/.venv/bin/activate && python -m src.subscription_monitor >> /path/to/yt2bl/logs/cron.log 2>&1
+0 * * * * source /path/to/yt2bl/.venv/bin/activate && python -m src.subscription_monitor run >/dev/null 2>&1
 
 # 每30分钟运行一次
-#*/30 * * * * source /path/to/yt2bl/.venv/bin/activate && python -m src.subscription_monitor >> /path/to/yt2bl/logs/cron.log 2>&1
+#*/30 * * * * source /path/to/yt2bl/.venv/bin/activate && python -m src.subscription_monitor run >/dev/null 2>&1
 
 # 每2小时运行一次
-#0 */2 * * * source /path/to/yt2bl/.venv/bin/activate && python -m src.subscription_monitor >> /path/to/yt2bl/logs/cron.log 2>&1
+#0 */2 * * * source /path/to/yt2bl/.venv/bin/activate && python -m src.subscription_monitor run >/dev/null 2>&1
 
 # 每天凌晨2点运行一次
-#0 2 * * * source /path/to/yt2bl/.venv/bin/activate && python -m src.subscription_monitor >> /path/to/yt2bl/logs/cron.log 2>&1
+#0 2 * * * source /path/to/yt2bl/.venv/bin/activate && python -m src.subscription_monitor run >/dev/null 2>&1
 
 # 测试用：每分钟运行一次（仅用于测试，不建议长期使用）
-#* * * * * source /path/to/yt2bl/.venv/bin/activate && python -m src.subscription_monitor >> /path/to/yt2bl/logs/cron.log 2>&1
+#* * * * * source /path/to/yt2bl/.venv/bin/activate && python -m src.subscription_monitor run >/dev/null 2>&1

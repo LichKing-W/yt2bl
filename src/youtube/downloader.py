@@ -103,6 +103,10 @@ class YouTubeDownloader:
                 "writethumbnail": True,  # 下载封面图
                 "thumbnail_format": "jpg",  # 封面图格式
                 "keepvideo": False,  # 不保留中间文件
+                # 缓存选项
+                "cachedir": False,  # 禁用缓存
+                # No check certificate
+                "nocheckcertificate": False,  # 保持证书检查
             }
 
             # 如果配置了cookies文件，添加cookies支持
@@ -399,15 +403,11 @@ class YouTubeDownloader:
         height = quality_map.get(self.quality, "720")
 
         # 格式选择逻辑：
-        # 1. 优先选择单文件mp4（video+audio在一起）
-        # 2. 如果没有，选择视频流 + 最佳音频，然后合并
+        # 1. 优先选择视频流 + 最佳音频（支持m3u8等adaptive格式）
+        # 2. 如果没有特定高度，选择最佳可用
         # 3. 最后回退到任何可用格式
         format_selector = (
-            f"bestvideo[height<={height}][ext=mp4]+bestaudio[ext=m4a]/"  # 1080p mp4视频 + m4a音频
-            f"bestvideo[height<={height}]+bestaudio/"  # 任意1080p视频 + 任意音频
-            f"best[height<={height}][ext=mp4]/"  # 单文件720p mp4
-            f"best[height<={height}]/"  # 单文件720p任意格式
-            f"best"  # 最后回退到最佳可用格式
+            f"bestvideo[height<={height}]+bestaudio/best[height<={height}]/best"
         )
 
         return format_selector
@@ -543,24 +543,43 @@ class YouTubeDownloader:
 
         return None
 
-    def _extract_info_sync(self, url: str) -> Optional[Dict[str, Any]]:
+    def _extract_info_sync(self, url: str, extra_opts: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
         """同步提取视频信息"""
         try:
-            ydl_opts = {
-                "quiet": True,
-                "no_warnings": True,
-            }
+            # 使用subprocess调用yt-dlp命令行，避免Python API的403错误
+            import subprocess
+            import json
 
-            # 如果配置了cookies文件，添加cookies支持
+            cmd = [
+                "yt-dlp",
+                "--dump-json",
+                "--no-playlist",
+                "--ignore-errors",
+                "--no-warnings",
+                url
+            ]
+
+            # 添加cookies文件
             if self.cookies_file and Path(self.cookies_file).exists():
-                ydl_opts["cookiefile"] = self.cookies_file
+                cmd.extend(["--cookies", self.cookies_file])
 
-            # 如果配置了代理，添加代理支持
+            # 添加代理
             if settings.proxy:
-                ydl_opts["proxy"] = settings.proxy
+                cmd.extend(["--proxy", settings.proxy])
 
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                return ydl.extract_info(url, download=False)
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+
+            if result.returncode == 0:
+                info = json.loads(result.stdout)
+                return info
+            else:
+                logger.error(f"yt-dlp命令行失败: {result.stderr}")
+                return None
 
         except Exception as e:
             logger.error(f"提取视频信息失败: {str(e)}")

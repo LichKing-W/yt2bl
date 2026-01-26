@@ -1,8 +1,11 @@
 """字幕处理模块"""
 
 import asyncio
+import hashlib
+import json
 import re
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -465,6 +468,30 @@ class SubtitleProcessor:
             all_translated_texts = []
 
             total_batches = (total_subtitles + batch_size - 1) // batch_size
+
+            # 计算字幕哈希值，用于缓存验证
+            subtitle_hash = self._calculate_subtitle_hash(merged_subtitle_path)
+
+            # 尝试加载翻译缓存
+            cache_path = self._get_subtitle_cache_path(output_path)
+            cache_data = self._load_translation_cache(cache_path, subtitle_hash, total_subtitles, batch_size)
+
+            # 从缓存中恢复已翻译的批次
+            translated_batches = {}  # {批次索引: [翻译文本列表]}
+            start_batch_index = 0  # 从第几批开始翻译
+
+            if cache_data:
+                # 有缓存，从缓存中恢复
+                translated_batches = {
+                    int(k): v for k, v in cache_data.get("translated_batches", {}).items()
+                }
+                start_batch_index = len(translated_batches)
+                logger.info(f"从缓存恢复，将从第 {start_batch_index + 1} 批开始翻译")
+
+                # 将缓存中的翻译文本展开到 all_translated_texts
+                for batch_idx in sorted(translated_batches.keys()):
+                    all_translated_texts.extend(translated_batches[batch_idx])
+
             logger.info(
                 f"步骤 3/4: 正在分批翻译字幕，共 {total_subtitles} 条，分 {total_batches} 批"
             )
@@ -472,6 +499,15 @@ class SubtitleProcessor:
             try:
                 for i in range(0, total_subtitles, batch_size):
                     batch_num = i // batch_size + 1
+                    batch_index = batch_num - 1  # 批次索引（从0开始）
+
+                    # 如果该批次已在缓存中，跳过
+                    if batch_index < start_batch_index:
+                        logger.info(
+                            f"跳过第 {batch_num}/{total_batches} 批（已缓存）"
+                        )
+                        continue
+
                     end_idx = min(i + batch_size, total_subtitles)
                     batch_subtitles = subtitles[i:end_idx]
 
@@ -551,6 +587,17 @@ class SubtitleProcessor:
                     )
                     all_translated_texts.extend(translated_texts)
 
+                    # 保存当前批次到缓存
+                    if cache_data is None:
+                        # 首次创建缓存
+                        cache_data = {
+                            "subtitle_hash": subtitle_hash,
+                            "total_subtitles": total_subtitles,
+                            "batch_size": batch_size,
+                            "translated_batches": {},
+                        }
+                    self._update_translation_cache(cache_path, cache_data, batch_index, translated_texts)
+
                     logger.info(
                         f"第 {batch_num}/{total_batches} 批翻译完成，翻译了 {len(translated_texts)} 条"
                     )
@@ -579,6 +626,9 @@ class SubtitleProcessor:
 
                 # 删除临时的预处理文件
                 merged_subtitle_path.unlink()
+
+                # 清除翻译缓存（翻译成功后）
+                self._clear_translation_cache(cache_path)
 
                 logger.info(f"字幕翻译完成: {output_path.name}")
                 return output_path
@@ -1453,3 +1503,148 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         # 未检测到任何硬件加速器，使用软件编码
         logger.info("未检测到可用的硬件加速器，使用软件编码 (libx264)")
         return {"encoder": "libx264", "args": [], "type": "none"}
+
+    def _get_subtitle_cache_path(self, output_path: Path) -> Path:
+        """获取字幕翻译缓存文件路径
+
+        Args:
+            output_path: 输出字幕文件路径
+
+        Returns:
+            缓存文件路径
+        """
+        return output_path.parent / f"{output_path.stem}.cache.json"
+
+    def _calculate_subtitle_hash(self, subtitle_path: Path) -> str:
+        """计算字幕文件的哈希值，用于验证缓存有效性
+
+        Args:
+            subtitle_path: 字幕文件路径
+
+        Returns:
+            MD5哈希值
+        """
+        content = subtitle_path.read_text(encoding="utf-8")
+        return hashlib.md5(content.encode("utf-8")).hexdigest()
+
+    def _load_translation_cache(
+        self, cache_path: Path, expected_hash: str, expected_total: int, batch_size: int
+    ) -> Optional[Dict[str, Any]]:
+        """加载翻译缓存
+
+        Args:
+            cache_path: 缓存文件路径
+            expected_hash: 预期的字幕哈希值
+            expected_total: 预期的字幕总数
+            batch_size: 批次大小
+
+        Returns:
+            缓存数据字典，如果缓存无效则返回 None
+        """
+        try:
+            if not cache_path.exists():
+                logger.info("未找到翻译缓存文件")
+                return None
+
+            logger.info(f"找到翻译缓存文件: {cache_path.name}")
+            cache_data = json.loads(cache_path.read_text(encoding="utf-8"))
+
+            # 验证缓存是否有效
+            if cache_data.get("subtitle_hash") != expected_hash:
+                logger.warning("字幕文件已更改，缓存无效")
+                return None
+
+            if cache_data.get("total_subtitles") != expected_total:
+                logger.warning("字幕数量不匹配，缓存无效")
+                return None
+
+            if cache_data.get("batch_size") != batch_size:
+                logger.warning("批次大小不匹配，缓存无效")
+                return None
+
+            translated_batches = cache_data.get("translated_batches", {})
+            cached_count = len(translated_batches) * batch_size
+            logger.info(
+                f"缓存有效: 已翻译 {cached_count}/{expected_total} 条字幕 ({len(translated_batches)} 批)"
+            )
+
+            return cache_data
+
+        except Exception as e:
+            logger.error(f"加载缓存文件失败: {str(e)}")
+            return None
+
+    def _save_translation_cache(
+        self,
+        cache_path: Path,
+        subtitle_hash: str,
+        total_subtitles: int,
+        batch_size: int,
+        translated_batches: Dict[int, List[str]],
+    ) -> None:
+        """保存翻译缓存
+
+        Args:
+            cache_path: 缓存文件路径
+            subtitle_hash: 字幕文件哈希值
+            total_subtitles: 字幕总数
+            batch_size: 批次大小
+            translated_batches: 已翻译的批次数据 {批次索引: [翻译文本列表]}
+        """
+        try:
+            cache_data = {
+                "subtitle_hash": subtitle_hash,
+                "total_subtitles": total_subtitles,
+                "batch_size": batch_size,
+                "translated_batches": {str(k): v for k, v in translated_batches.items()},
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat(),
+            }
+
+            cache_path.write_text(json.dumps(cache_data, ensure_ascii=False, indent=2), encoding="utf-8")
+            logger.debug(f"翻译缓存已保存: {cache_path.name}")
+
+        except Exception as e:
+            logger.error(f"保存缓存文件失败: {str(e)}")
+
+    def _update_translation_cache(
+        self,
+        cache_path: Path,
+        cache_data: Dict[str, Any],
+        batch_index: int,
+        translated_texts: List[str],
+    ) -> None:
+        """更新翻译缓存（添加一个新批次）
+
+        Args:
+            cache_path: 缓存文件路径
+            cache_data: 现有缓存数据
+            batch_index: 批次索引
+            translated_texts: 该批次的翻译文本列表
+        """
+        try:
+            # 更新批次数据
+            translated_batches = cache_data.get("translated_batches", {})
+            translated_batches[str(batch_index)] = translated_texts
+            cache_data["translated_batches"] = translated_batches
+            cache_data["updated_at"] = datetime.now().isoformat()
+
+            # 保存更新后的缓存
+            cache_path.write_text(json.dumps(cache_data, ensure_ascii=False, indent=2), encoding="utf-8")
+            logger.debug(f"缓存已更新: 批次 {batch_index}")
+
+        except Exception as e:
+            logger.error(f"更新缓存文件失败: {str(e)}")
+
+    def _clear_translation_cache(self, cache_path: Path) -> None:
+        """清除翻译缓存文件
+
+        Args:
+            cache_path: 缓存文件路径
+        """
+        try:
+            if cache_path.exists():
+                cache_path.unlink()
+                logger.info(f"翻译缓存已清除: {cache_path.name}")
+        except Exception as e:
+            logger.error(f"清除缓存文件失败: {str(e)}")
