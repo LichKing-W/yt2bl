@@ -107,6 +107,8 @@ class YouTubeDownloader:
                 "cachedir": False,  # 禁用缓存
                 # No check certificate
                 "nocheckcertificate": False,  # 保持证书检查
+                # JavaScript运行时配置（用于解决YouTube的n challenge）
+                "js_runtimes": {"deno": {}},  # 使用deno来解决JavaScript挑战
             }
 
             # 如果配置了cookies文件，添加cookies支持
@@ -195,8 +197,12 @@ class YouTubeDownloader:
     async def _check_subtitle_files(self, video_path: Path) -> None:
         """检查字幕文件并重命名为标准格式"""
         try:
+            import re
             parent_dir = video_path.parent
             base_name = video_path.stem  # 原始视频标题
+
+            # 移除 _original 后缀（如果存在）
+            clean_base_name = re.sub(r'_original$', '', base_name)
 
             # 字幕文件可能的扩展名和语言标识
             sub_extensions = [".srt", ".vtt"]
@@ -204,10 +210,9 @@ class YouTubeDownloader:
 
             found_en_sub = None
 
-            # 查找英文字幕
+            # 首先使用原始base_name查找（向后兼容）
             for ext in sub_extensions:
                 for lang in lang_patterns:
-                    # 检查 {标题}{语言标识}.{扩展名}
                     sub_file = parent_dir / f"{base_name}{lang}{ext}"
                     if sub_file.exists():
                         found_en_sub = sub_file
@@ -215,6 +220,19 @@ class YouTubeDownloader:
                         break
                 if found_en_sub:
                     break
+
+            # 如果没找到，使用清理后的base_name查找（移除_original后缀）
+            if not found_en_sub and clean_base_name != base_name:
+                logger.debug(f"使用清理后的文件名查找字幕: {clean_base_name}")
+                for ext in sub_extensions:
+                    for lang in lang_patterns:
+                        sub_file = parent_dir / f"{clean_base_name}{lang}{ext}"
+                        if sub_file.exists():
+                            found_en_sub = sub_file
+                            logger.info(f"找到英文字幕: {sub_file.name}")
+                            break
+                    if found_en_sub:
+                        break
 
             # 重命名英文字幕为 en.srt
             if found_en_sub:
@@ -339,11 +357,15 @@ class YouTubeDownloader:
             重命名后的视频文件路径，如果文件已经是_original结尾或重命名失败则返回原路径
         """
         try:
+            import re
             parent_dir = video_path.parent
-            base_name = video_path.stem  # 原始视频标题
+            base_name = video_path.stem  # 原始视频标题（可能包含.f399等格式标识）
+
+            # 移除格式标识（如 .f399, .f299, .f140等）
+            clean_base_name = re.sub(r'\.f\d+$', '', base_name)
 
             # 目标文件名：{title}_original.mp4
-            original_name = f"{base_name}_original.mp4"
+            original_name = f"{clean_base_name}_original.mp4"
             original_path = parent_dir / original_name
 
             # 如果文件不叫 _original，则重命名
@@ -392,7 +414,8 @@ class YouTubeDownloader:
         """获取格式选择器
 
         YouTube的高分辨率视频（1080p+）通常是分离的视频和音频流（DASH格式），
-        需要合并。这个格式选择器会优先选择单文件，然后回退到视频+音频合并。
+        需要合并。这个格式选择器优先选择mp4 dash格式而不是m3u8格式，
+        因为m3u8格式需要JavaScript运行时来解决n challenge。
         """
         quality_map = {
             "480p": "480",
@@ -403,11 +426,17 @@ class YouTubeDownloader:
         height = quality_map.get(self.quality, "720")
 
         # 格式选择逻辑：
-        # 1. 优先选择视频流 + 最佳音频（支持m3u8等adaptive格式）
-        # 2. 如果没有特定高度，选择最佳可用
-        # 3. 最后回退到任何可用格式
+        # 1. 优先选择mp4 dash格式（避免m3u8的n challenge问题）
+        # 2. 然后选择其他dash格式
+        # 3. 最后回退到m3u8格式
+        # 使用vcodec过滤器来选择特定编解码器的格式
         format_selector = (
-            f"bestvideo[height<={height}]+bestaudio/best[height<={height}]/best"
+            f"vcodec^=avc1[height<={height}]+bestaudio/"  # 优先mp4 dash (avc1)
+            f"bestvideo[height<={height}][ext=mp4]+bestaudio[ext=m4a]/"  # mp4视频+m4a音频
+            f"bestvideo[height<={height}][ext=mp4]+bestaudio/"  # mp4视频+任意音频
+            f"bestvideo[height<={height}]+bestaudio/"  # 任意视频+音频
+            f"best[height<={height}]/"  # 单文件
+            f"best"  # 最后回退到最佳可用格式
         )
 
         return format_selector
@@ -556,6 +585,7 @@ class YouTubeDownloader:
                 "--no-playlist",
                 "--ignore-errors",
                 "--no-warnings",
+                "--js-runtimes", "deno",  # 使用deno解决JavaScript挑战
                 url
             ]
 

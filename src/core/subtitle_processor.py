@@ -474,7 +474,9 @@ class SubtitleProcessor:
 
             # 尝试加载翻译缓存
             cache_path = self._get_subtitle_cache_path(output_path)
-            cache_data = self._load_translation_cache(cache_path, subtitle_hash, total_subtitles, batch_size)
+            cache_data = self._load_translation_cache(
+                cache_path, subtitle_hash, total_subtitles, batch_size
+            )
 
             # 从缓存中恢复已翻译的批次
             translated_batches = {}  # {批次索引: [翻译文本列表]}
@@ -483,7 +485,8 @@ class SubtitleProcessor:
             if cache_data:
                 # 有缓存，从缓存中恢复
                 translated_batches = {
-                    int(k): v for k, v in cache_data.get("translated_batches", {}).items()
+                    int(k): v
+                    for k, v in cache_data.get("translated_batches", {}).items()
                 }
                 start_batch_index = len(translated_batches)
                 logger.info(f"从缓存恢复，将从第 {start_batch_index + 1} 批开始翻译")
@@ -503,9 +506,7 @@ class SubtitleProcessor:
 
                     # 如果该批次已在缓存中，跳过
                     if batch_index < start_batch_index:
-                        logger.info(
-                            f"跳过第 {batch_num}/{total_batches} 批（已缓存）"
-                        )
+                        logger.info(f"跳过第 {batch_num}/{total_batches} 批（已缓存）")
                         continue
 
                     end_idx = min(i + batch_size, total_subtitles)
@@ -596,7 +597,9 @@ class SubtitleProcessor:
                             "batch_size": batch_size,
                             "translated_batches": {},
                         }
-                    self._update_translation_cache(cache_path, cache_data, batch_index, translated_texts)
+                    self._update_translation_cache(
+                        cache_path, cache_data, batch_index, translated_texts
+                    )
 
                     logger.info(
                         f"第 {batch_num}/{total_batches} 批翻译完成，翻译了 {len(translated_texts)} 条"
@@ -1215,8 +1218,8 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: English,DejaVu Sans,{en_font_size},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,2,10,10,0,1
-Style: Chinese,Source Han Sans CN,{zh_font_size},&H00FFFFFF,&H000000FF,&H00503129,&H00000000,0,0,0,0,100,100,0,0,1,3,0,2,10,10,{en_font_size + 4},1
+Style: English,DejaVu Sans,{en_font_size},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,2,10,10,4,1
+Style: Chinese,Source Han Sans CN,{zh_font_size},&H00FFFFFF,&H000000FF,&H00503129,&H00000000,0,0,0,0,100,100,0,0,1,3,0,2,10,10,{en_font_size + 8},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -1336,7 +1339,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             # 解决 FFmpeg ass 滤镜无法正确处理路径中特殊字符（如单引号）的问题
             import tempfile
             import shutil
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.ass', delete=False) as tmp:
+
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".ass", delete=False
+            ) as tmp:
                 temp_subtitle_path = Path(tmp.name)
             # 复制字幕内容到临时文件
             shutil.copy(subtitle_path, temp_subtitle_path)
@@ -1391,11 +1397,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     logger.info(f"字幕嵌入成功: {output_path.name}")
                     return output_path
                 else:
-                    logger.error(f"字幕嵌入失败: {stderr.decode('utf-8', errors='ignore')}")
+                    logger.error(
+                        f"字幕嵌入失败: {stderr.decode('utf-8', errors='ignore')}"
+                    )
                     raise RuntimeError("FFmpeg字幕嵌入失败")
             finally:
                 # 清理临时字幕文件
-                if 'temp_subtitle_path' in locals() and temp_subtitle_path.exists():
+                if "temp_subtitle_path" in locals() and temp_subtitle_path.exists():
                     temp_subtitle_path.unlink()
                     logger.info(f"已删除临时字幕文件: {temp_subtitle_path.name}")
 
@@ -1596,12 +1604,16 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 "subtitle_hash": subtitle_hash,
                 "total_subtitles": total_subtitles,
                 "batch_size": batch_size,
-                "translated_batches": {str(k): v for k, v in translated_batches.items()},
+                "translated_batches": {
+                    str(k): v for k, v in translated_batches.items()
+                },
                 "created_at": datetime.now().isoformat(),
                 "updated_at": datetime.now().isoformat(),
             }
 
-            cache_path.write_text(json.dumps(cache_data, ensure_ascii=False, indent=2), encoding="utf-8")
+            cache_path.write_text(
+                json.dumps(cache_data, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
             logger.debug(f"翻译缓存已保存: {cache_path.name}")
 
         except Exception as e:
@@ -1630,7 +1642,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             cache_data["updated_at"] = datetime.now().isoformat()
 
             # 保存更新后的缓存
-            cache_path.write_text(json.dumps(cache_data, ensure_ascii=False, indent=2), encoding="utf-8")
+            cache_path.write_text(
+                json.dumps(cache_data, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
             logger.debug(f"缓存已更新: 批次 {batch_index}")
 
         except Exception as e:

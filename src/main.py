@@ -789,12 +789,6 @@ class YouTubeToBilibili:
                         logger.warning(f"生成视频简介失败: {str(e)}")
                         self.console.print(f"⚠️ 视频简介生成失败: {str(e)}", style="yellow")
 
-                # 如果启用了字幕嵌入，则嵌入双语字幕
-                if self.embed_subs:
-                    embedded_video = await self.embed_bilingual_subtitles(video_path, result)
-                    if embedded_video:
-                        self.console.print(f"✅ 双语字幕视频已生成: {embedded_video.name}", style="green")
-
                 return result
             else:
                 self.console.print(f"❌ 字幕翻译失败: {subtitle_path.name}", style="red")
