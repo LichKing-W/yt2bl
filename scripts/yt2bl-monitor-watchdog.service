@@ -1,0 +1,19 @@
+[Unit]
+Description=YouTube to Bilibili Subscription Monitor Watchdog
+After=network-online.target
+Documentation=https://github.com/yourusername/yt2bl
+
+[Service]
+Type=oneshot
+User=bk
+WorkingDirectory=/home/bk/projects/yt2bl
+Environment="PATH=/home/bk/projects/yt2bl/.venv/bin:/usr/bin:/bin"
+ExecStart=/home/bk/projects/yt2bl/.venv/bin/python /home/bk/projects/yt2bl/scripts/monitor_subscription.py --timeout 6
+# 每10分钟检查一次，由timer控制
+
+# 安全设置
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

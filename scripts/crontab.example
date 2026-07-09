@@ -34,3 +34,14 @@
 
 # 测试用：每分钟运行一次（仅用于测试，不建议长期使用）
 #* * * * * source /path/to/yt2bl/.venv/bin/activate && python -m src.subscription_monitor run >/dev/null 2>&1
+
+# ========== 进程监控 ==========
+# 监控subscription进程，防止运行超过6小时阻塞后续任务
+# 每小时检查一次（与主服务同步）
+0 * * * * source /path/to/yt2bl/.venv/bin/activate && python scripts/monitor_subscription.py >/dev/null 2>&1
+
+# 或者使用更短的间隔（每10分钟）
+#*/10 * * * * source /path/to/yt2bl/.venv/bin/activate && python scripts/monitor_subscription.py >/dev/null 2>&1
+
+# 自定义超时时间（例如3小时）
+#0 * * * * source /path/to/yt2bl/.venv/bin/activate && python scripts/monitor_subscription.py --timeout 3 >/dev/null 2>&1

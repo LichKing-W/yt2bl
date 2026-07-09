@@ -1,0 +1,14 @@
+[Unit]
+Description=YouTube to Bilibili Subscription Monitor Watchdog Timer
+Requires=yt2bl-monitor-watchdog.service
+
+[Timer]
+# 每10分钟检查一次进程是否超时
+OnCalendar=*:0/10
+# 也可以使用精确间隔
+# OnUnitActiveSec=10min
+Unit=yt2bl-monitor-watchdog.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target
