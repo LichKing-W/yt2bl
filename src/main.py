@@ -1222,6 +1222,56 @@ class YouTubeToBilibili:
             self.console.print(f"❌ 程序执行异常: {str(e)}", style="red")
             logger.error(f"程序执行异常: {str(e)}")
 
+    async def _embed_bilingual(
+        self,
+        video: YouTubeVideo,
+        downloaded_path: Path,
+        bilingual_subtitle_path: Path,
+        *,
+        fix_overlaps: bool = False,
+    ) -> Optional[Path]:
+        """嵌入双语字幕（zh.srt）到视频（run_full_workflow / run_prepare_only 共用）。
+
+        - fix_overlaps: 嵌入前先修复字幕时间轴重叠（run_prepare_only 使用）。
+        - 自动优先选用 {stem}_original.mp4 作为输入，保证可重复嵌入。
+        - 成功时更新 video.downloaded_path 并返回嵌入后的路径；失败返回 None。
+        """
+        if fix_overlaps and bilingual_subtitle_path.exists():
+            self.console.print("🔧 修复字幕时间轴...")
+            self.console.print(f"   修复双语字幕: {bilingual_subtitle_path.name}", style="dim")
+            import shutil
+
+            fixed_path = self.subtitle_processor.fix_subtitle_overlaps(bilingual_subtitle_path)
+            shutil.move(str(fixed_path), str(bilingual_subtitle_path))
+            self.console.print("   ✅ 双语字幕修复完成", style="green")
+
+        self.console.print(
+            f"📝 双语字幕: {bilingual_subtitle_path.name if bilingual_subtitle_path.exists() else '未找到'}",
+            style="dim",
+        )
+        if not bilingual_subtitle_path.exists():
+            self.console.print("❌ 缺少双语字幕文件，工作流停止", style="red")
+            return None
+
+        self.console.print("📝 使用双语字幕嵌入视频...")
+        parent_dir = downloaded_path.parent
+        input_video = downloaded_path
+        if not downloaded_path.stem.endswith("_original"):
+            original_video = parent_dir / f"{downloaded_path.stem}_original.mp4"
+            if original_video.exists():
+                input_video = original_video
+                logger.info(f"使用原始视频作为输入: {original_video.name}")
+
+        embedded_video_path = await self.subtitle_processor.embed_subtitles_to_video(
+            input_video, bilingual_subtitle_path
+        )
+        if not embedded_video_path:
+            self.console.print("❌ 字幕嵌入失败，工作流停止", style="red")
+            return None
+        self.console.print(f"✅ 字幕嵌入完成: {embedded_video_path.name}")
+        video.downloaded_path = str(embedded_video_path)
+        return embedded_video_path
+
     async def run_full_workflow(self, youtube_url: str) -> None:
         """运行完整的端到端工作流
 
@@ -1271,44 +1321,11 @@ class YouTubeToBilibili:
             # 步骤 3: 嵌入双语字幕到视频
             self.console.print(f"\n🎬 步骤 3/5: 嵌入双语字幕到视频", style="bold blue")
 
-            # 查找翻译后的双语字幕
-            parent_dir = downloaded_path.parent
-
-            # 调试：列出文件夹中的所有文件
-            all_files = list(parent_dir.glob("*"))
-            self.console.print(f"📂 视频文件夹中的文件:", style="dim")
-            for f in all_files:
-                self.console.print(f"   - {f.name}", style="dim")
-
-            # 双语字幕路径（统一为 zh.srt）
-            bilingual_subtitle_path = parent_dir / "zh.srt"
-
-            self.console.print(f"📝 双语字幕: {bilingual_subtitle_path.name if bilingual_subtitle_path.exists() else '未找到'}", style="dim")
-
-            if bilingual_subtitle_path.exists():
-                # 使用双语字幕直接嵌入
-                self.console.print("📝 使用双语字幕嵌入视频...")
-
-                # 确保使用 _original.mp4 作为输入
-                input_video = downloaded_path
-                if not downloaded_path.stem.endswith("_original"):
-                    original_video = parent_dir / f"{downloaded_path.stem}_original.mp4"
-                    if original_video.exists():
-                        input_video = original_video
-                        logger.info(f"使用原始视频作为输入: {original_video.name}")
-
-                embedded_video_path = await self.subtitle_processor.embed_subtitles_to_video(
-                    input_video, bilingual_subtitle_path
-                )
-                if embedded_video_path:
-                    self.console.print(f"✅ 字幕嵌入完成: {embedded_video_path.name}")
-                    # 更新视频路径为嵌入字幕后的视频
-                    video.downloaded_path = str(embedded_video_path)
-                else:
-                    self.console.print("❌ 字幕嵌入失败，工作流停止", style="red")
-                    return
-            else:
-                self.console.print("❌ 缺少双语字幕文件，工作流停止", style="red")
+            bilingual_subtitle_path = downloaded_path.parent / "zh.srt"
+            embedded_video_path = await self._embed_bilingual(
+                video, downloaded_path, bilingual_subtitle_path
+            )
+            if not embedded_video_path:
                 return
 
             # 步骤 4: 上传到 Bilibili
@@ -1403,44 +1420,10 @@ class YouTubeToBilibili:
 
             # 双语字幕路径（统一为 zh.srt）
             bilingual_subtitle_path = parent_dir / "zh.srt"
-
-            # 对双语字幕进行时间轴修复预处理
-            self.console.print("🔧 修复字幕时间轴...")
-            if bilingual_subtitle_path.exists():
-                self.console.print(f"   修复双语字幕: {bilingual_subtitle_path.name}", style="dim")
-                fixed_path = self.subtitle_processor.fix_subtitle_overlaps(bilingual_subtitle_path)
-                # 用修复后的字幕替换原字幕
-                import shutil
-                shutil.move(str(fixed_path), str(bilingual_subtitle_path))
-                self.console.print(f"   ✅ 双语字幕修复完成", style="green")
-
-            self.console.print(f"📝 双语字幕: {bilingual_subtitle_path.name if bilingual_subtitle_path.exists() else '未找到'}", style="dim")
-
-            if bilingual_subtitle_path.exists():
-                # 使用双语字幕直接嵌入
-                self.console.print("📝 使用双语字幕嵌入视频...")
-
-                # 确保使用 _original.mp4 作为输入
-                # 如果 downloaded_path 是最终版本（不带 _original），查找原始版本
-                input_video = downloaded_path
-                if not downloaded_path.stem.endswith("_original"):
-                    # 查找对应的 _original 文件
-                    original_video = parent_dir / f"{downloaded_path.stem}_original.mp4"
-                    if original_video.exists():
-                        input_video = original_video
-                        logger.info(f"使用原始视频作为输入: {original_video.name}")
-
-                embedded_video_path = await self.subtitle_processor.embed_subtitles_to_video(
-                    input_video, bilingual_subtitle_path
-                )
-                if embedded_video_path:
-                    self.console.print(f"✅ 字幕嵌入完成: {embedded_video_path.name}")
-                    video.downloaded_path = str(embedded_video_path)
-                else:
-                    self.console.print("❌ 字幕嵌入失败，工作流停止", style="red")
-                    return
-            else:
-                self.console.print("❌ 缺少双语字幕文件，工作流停止", style="red")
+            embedded_video_path = await self._embed_bilingual(
+                video, downloaded_path, bilingual_subtitle_path, fix_overlaps=True
+            )
+            if not embedded_video_path:
                 return
 
             # 步骤 4: 生成视频简介
