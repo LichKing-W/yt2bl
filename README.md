@@ -13,18 +13,7 @@
 
 ## 快速开始
 
-### 一键安装
-
-```bash
-# 克隆项目
-git clone <repository-url>
-cd youtube-projects
-
-# 运行安装脚本
-./setup.sh
-```
-
-### 手动安装
+### 安装
 
 1. **环境要求**
    - Python 3.9+
@@ -120,7 +109,6 @@ youtube-projects/
 ├── data/                  # 视频存储目录
 ├── logs/                  # 日志文件
 ├── .env                   # 配置文件
-├── setup.sh              # 安装脚本
 └── README.md             # 说明文档
 ```
 
@@ -135,9 +123,7 @@ python -m src.main --max-videos 5
 
 程序会：
 1. 搜索计算机领域热门视频
-2. 显示搜索结果表格
-3. 让用户选择要下载的视频
-4. 下载选中的视频到 `data/` 目录
+2. 自动下载前 N 个视频到 `data/` 目录（命令行模式，非交互）
 
 ### 下载指定视频
 

@@ -8,46 +8,53 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.core.subtitle_processor import SubtitleProcessor
 
 
-def test_chinese_character_count():
-    """测试中文字符计数"""
-    print("\n=== 测试中文字符计数 ===")
+def test_word_count():
+    """测试单词计数"""
+    print("\n=== 测试单词计数 ===")
 
     processor = SubtitleProcessor()
 
-    # 测试纯中文
-    text1 = "这是一段很长的中文文本用于测试计数功能是否正常工作"
-    count1 = processor._count_chinese_characters(text1)
-    print(f"纯中文 ({len(text1)} 字符): {count1} 个中文字符")
-    assert count1 == len(text1), f"纯中文计数失败: {count1} != {len(text1)}"
+    # 测试短文本
+    text1 = "Hello world"
+    count1 = processor._count_words(text1)
+    print(f"短文本 ('{text1}'): {count1} 个单词")
+    assert count1 == 2, f"短文本计数失败: {count1} != 2"
 
-    # 测试混合文本
-    text2 = "Hello 世界！This is a test 测试"
-    count2 = processor._count_chinese_characters(text2)
-    print(f"混合文本: {count2} 个中文字符")
-    assert count2 == 4, f"混合文本计数失败: {count2} != 4"
+    # 测试较长文本
+    text2 = "This is a test with multiple words"
+    count2 = processor._count_words(text2)
+    print(f"较长文本: {count2} 个单词")
+    assert count2 == 7, f"较长文本计数失败: {count2} != 7"
 
-    # 测试纯英文
-    text3 = "This is English only text"
-    count3 = processor._count_chinese_characters(text3)
-    print(f"纯英文: {count3} 个中文字符")
-    assert count3 == 0, f"纯英文计数失败: {count3} != 0"
+    # 测试带标点符号的文本
+    text3 = "Hello, world! How are you"
+    count3 = processor._count_words(text3)
+    print(f"带标点符号的文本: {count3} 个单词")
+    assert count3 == 5, f"带标点符号文本计数失败: {count3} != 5"
 
-    print("✅ 中文字符计数测试通过!")
+    # 测试纯中文（会被识别为"单词"）
+    text4 = "这是一段很长的中文文本用于测试计数功能是否正常工作"
+    count4 = processor._count_words(text4)
+    print(f"纯中文: {count4} 个单词（中文字符序列）")
+    # Note: Regex treats Chinese characters as word chars, so the entire line counts as 1
+    assert count4 >= 1, f"纯中文计数失败: {count4}"
+
+    print("✅ 单词计数测试通过!")
 
 
-def test_merge_with_long_chinese():
-    """测试包含长中文文本的合并"""
-    print("\n=== 测试长中文文本合并逻辑 ===")
+def test_merge_with_long_text():
+    """测试包含长文本的合并（超过15个单词不合并）"""
+    print("\n=== 测试长文本合并逻辑 ===")
 
     processor = SubtitleProcessor()
 
-    # 创建测试字幕：包含超过20个中文字符的行
+    # 创建测试字幕：包含超过15个单词的行
     test_subtitles = [
         {
             "index": 1,
             "start": "00:00:01,000",
             "end": "00:00:04,000",
-            "text": "这是一段非常长的中文文本超过了二十个字符应该独立显示"
+            "text": "This is a very long line with many words that should exceed fifteen words"
         },
         {
             "index": 2,
@@ -65,13 +72,13 @@ def test_merge_with_long_chinese():
             "index": 4,
             "start": "00:00:12,500",
             "end": "00:00:16,000",
-            "text": "第三行短文本"
+            "text": "Third line"
         },
         {
             "index": 5,
             "start": "00:00:16,500",
             "end": "00:00:20,000",
-            "text": "第四行短文本"
+            "text": "Fourth line"
         },
     ]
 
@@ -95,17 +102,17 @@ def test_merge_with_long_chinese():
     print(f"合并后: {len(merged_subs)} 条")
 
     for i, sub in enumerate(merged_subs):
-        zh_count = processor._count_chinese_characters(sub['text'])
-        print(f"  {i+1}. [{zh_count} 中文字符] {sub['text']}")
+        word_count = processor._count_words(sub['text'])
+        print(f"  {i+1}. [{word_count} 单词] {sub['text']}")
 
     # 验证：
-    # 第1行应该独立（超过20个中文字符）
+    # 第1行应该独立（超过15个单词）
     # 第2-3行应该合并
     # 第4-5行应该合并
     assert len(merged_subs) == 3, f"应该合并为3条，实际{len(merged_subs)}条"
 
     # 验证第一条
-    assert "这是一段非常长的中文文本" in merged_subs[0]["text"]
+    assert "This is a very long line" in merged_subs[0]["text"]
     assert merged_subs[0]["text"] == test_subtitles[0]["text"]
 
     # 验证第二条（2和3合并）
@@ -113,48 +120,48 @@ def test_merge_with_long_chinese():
     assert "Another short text" in merged_subs[1]["text"]
 
     # 验证第三条（4和5合并）
-    assert "第三行短文本" in merged_subs[2]["text"]
-    assert "第四行短文本" in merged_subs[2]["text"]
+    assert "Third line" in merged_subs[2]["text"]
+    assert "Fourth line" in merged_subs[2]["text"]
 
     # 清理
     test_file.unlink()
     if result_file.exists():
         result_file.unlink()
 
-    print("✅ 长中文文本合并测试通过!")
+    print("✅ 长文本合并测试通过!")
 
 
-def test_merge_with_short_chinese():
-    """测试包含短中文文本的合并"""
-    print("\n=== 测试短中文文本合并逻辑 ===")
+def test_merge_with_short_text():
+    """测试包含短文本的合并（15个单词以内正常合并）"""
+    print("\n=== 测试短文本合并逻辑 ===")
 
     processor = SubtitleProcessor()
 
-    # 创建测试字幕：所有行都不超过20个中文字符
+    # 创建测试字幕：所有合并后都不超过15个单词
     test_subtitles = [
         {
             "index": 1,
             "start": "00:00:01,000",
             "end": "00:00:04,000",
-            "text": "第一行文本"
+            "text": "First line here"
         },
         {
             "index": 2,
             "start": "00:00:04,500",
             "end": "00:00:08,000",
-            "text": "第二行文本"
+            "text": "Second line text"
         },
         {
             "index": 3,
             "start": "00:00:08,500",
             "end": "00:00:12,000",
-            "text": "Third line"
+            "text": "Third line is here"
         },
         {
             "index": 4,
             "start": "00:00:12,500",
             "end": "00:00:16,000",
-            "text": "第四行"
+            "text": "Fourth line"
         },
     ]
 
@@ -178,25 +185,26 @@ def test_merge_with_short_chinese():
     print(f"合并后: {len(merged_subs)} 条")
 
     for i, sub in enumerate(merged_subs):
-        print(f"  {i+1}. {sub['text']}")
+        word_count = processor._count_words(sub['text'])
+        print(f"  {i+1}. [{word_count} 单词] {sub['text']}")
 
     # 验证：应该正常两两合并
     assert len(merged_subs) == 2, f"应该合并为2条，实际{len(merged_subs)}条"
 
     # 验证第一条（1和2合并）
-    assert "第一行文本" in merged_subs[0]["text"]
-    assert "第二行文本" in merged_subs[0]["text"]
+    assert "First line here" in merged_subs[0]["text"]
+    assert "Second line text" in merged_subs[0]["text"]
 
     # 验证第二条（3和4合并）
-    assert "Third line" in merged_subs[1]["text"]
-    assert "第四行" in merged_subs[1]["text"]
+    assert "Third line is here" in merged_subs[1]["text"]
+    assert "Fourth line" in merged_subs[1]["text"]
 
     # 清理
     test_file.unlink()
     if result_file.exists():
         result_file.unlink()
 
-    print("✅ 短中文文本合并测试通过!")
+    print("✅ 短文本合并测试通过!")
 
 
 def main():
@@ -206,9 +214,9 @@ def main():
     print("=" * 60)
 
     try:
-        test_chinese_character_count()
-        test_merge_with_long_chinese()
-        test_merge_with_short_chinese()
+        test_word_count()
+        test_merge_with_long_text()
+        test_merge_with_short_text()
 
         print("\n" + "=" * 60)
         print("✅ 所有测试通过!")

@@ -20,7 +20,7 @@ class Settings:
         # 下载配置
         self.download_path: str = "./data"
         self.max_video_size_mb: int = 500
-        self.video_quality: str = "720p"
+        self.video_quality: str = "1080p"  # 默认下载1080p
         self.youtube_cookies_file: Optional[str] = None  # YouTube cookies文件路径
 
         # 上传配置
