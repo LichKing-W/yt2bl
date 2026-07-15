@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..utils.config import settings
+from ..utils.llm_client import llm_complete
 from ..utils.logger import logger
 
 
@@ -700,43 +701,16 @@ class SubtitleProcessor:
         model: str = "gpt-4o-mini",
     ) -> str:
         """调用OpenAI API进行翻译"""
-        try:
-            import openai
-
-            # 构建客户端参数
-            client_kwargs = {"api_key": api_key}
-            if base_url:
-                client_kwargs["base_url"] = base_url
-                logger.info(f"使用自定义API端点: {base_url}")
-
-            client = openai.AsyncOpenAI(**client_kwargs)
-
-            # 调用API - prompt_template作为system，subtitle_text作为user
-            response = await client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": prompt_template},
-                    {"role": "user", "content": subtitle_text},
-                ],
-                temperature=0.3,
-                max_tokens=8192,  # 增加token限制以支持完整字幕文件
-            )
-            # logger.info(response)
-
-            # 获取翻译结果
-            translated_text = response.choices[0].message.content.strip()
-
-            # 记录模型原始输出（用于调试）
-            logger.debug(f"[模型原始输出]\n{translated_text}\n[/模型原始输出]")
-
-            return translated_text
-
-        except ImportError:
-            logger.error("未安装openai库，请运行: pip install openai")
-            raise
-        except Exception as e:
-            logger.error(f"LLM API调用失败: {str(e)}")
-            raise
+        return await llm_complete(
+            prompt_template,
+            subtitle_text,
+            api_key,
+            model=model,
+            base_url=base_url,
+            temperature=0.3,
+            max_tokens=8192,
+            debug_label="模型",
+        )
 
     def extract_plain_text_from_srt(self, srt_path: Path) -> str:
         """从SRT字幕文件中提取纯文本（去除时间轴和序号）
@@ -1031,8 +1005,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
             # 创建不含特殊字符的临时字幕文件路径
             # 解决 FFmpeg ass 滤镜无法正确处理路径中特殊字符（如单引号）的问题
-            import tempfile
             import shutil
+            import tempfile
 
             with tempfile.NamedTemporaryFile(
                 mode="w", suffix=".ass", delete=False
