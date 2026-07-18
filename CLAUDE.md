@@ -52,10 +52,6 @@ pip install -e ".[dev]"  # Include dev dependencies
 pip install -e ".[video]"    # For MoviePy video processing
 pip install -e ".[bilibili]" # For Bilibili upload
 pip install -e ".[translate]" # For subtitle translation via OpenAI
-
-# Alternative: Development mode (run without full install)
-# See INSTALL_GUIDE.md for details
-./scripts/run_dev.sh
 ```
 
 **Running**:
@@ -214,7 +210,6 @@ See `scripts/monitor_README.md` for the watchdog details.
 ```bash
 pytest test/ -v                    # Run all tests
 pytest test/test_specific.py -v    # Single test file
-./scripts/quick_test.sh            # Quick test script
 ```
 
 **Code Quality**:
