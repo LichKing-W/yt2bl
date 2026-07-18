@@ -3,6 +3,7 @@ name = "youtube-to-bilibili"
 version = "0.1.0"
 description = "YouTube to Bilibili video transfer tool for computer science content"
 readme = "README.md"
+license = {text = "MIT"}
 requires-python = ">=3.9"
 dependencies = [
     "requests>=2.31.0",
