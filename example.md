@@ -1,455 +1,292 @@
-# YouTube to Bilibili 视频搬运工具 - 使用说明
+# YouTube to Bilibili 视频搬运工具 - 使用示例
+
+> 本文件聚焦**实际使用方式与命令示例**。安装细节见 [INSTALL_GUIDE.md](INSTALL_GUIDE.md)，完整开发说明见 [CLAUDE.md](CLAUDE.md)。
 
 ## 项目简介
 
-YouTube to Bilibili 是一个自动化视频搬运工具，专门用于将YouTube上的计算机科学相关视频下载并搬运到Bilibili平台。该工具支持智能搜索、视频下载、格式转换和自动上传等功能。
+将 YouTube 计算机科学相关视频搬运到 Bilibili 的自动化工具：搜索/下载 → LLM 字幕翻译 → 双语字幕嵌入 → 转载上传到 B 站（自动生成中文标题、标签、简介）。支持完整端到端工作流、两步工作流，以及订阅监控（一次性、由 crontab/systemd timer 触发）。
 
-## 快速开始
+**所有命令均为非交互式（纯命令行参数驱动）**，适合脚本与定时任务自动化。
 
-### 1. 环境要求
+## 环境与安装
 
-- **Python**: 3.9 或更高版本
-- **操作系统**: Linux, macOS, Windows
-- **网络**: 稳定的互联网连接（可能需要代理访问YouTube）
-
-### 2. 一键安装
+- **Python** 3.9+（推荐 3.11+）
+- **FFmpeg**（必须在 `PATH` 中，用于合并 1080p+ 视频流和嵌入字幕）
 
 ```bash
-# 克隆项目
-git clone <repository-url>
-cd youtube-projects
-
-# 运行安装脚本
-chmod +x setup.sh
-./setup.sh
+git clone git@github.com:LichKing-W/yt2bl.git
+cd yt2bl
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e .            # 注册 yt2bl 命令；可选: pip install -e ".[dev]"
+cp .env.example .env        # 然后编辑 .env 填写配置
 ```
 
-### 3. 手动安装
+详见 [INSTALL_GUIDE.md](INSTALL_GUIDE.md)。
 
-```bash
-# 1. 创建虚拟环境
-python3 -m venv .venv
-source .venv/bin/activate  # Linux/macOS
-# 或 .venv\Scripts\activate  # Windows
+## 配置 `.env`
 
-# 2. 安装依赖
-pip install -e .
-
-# 3. 创建配置文件
-cp .env.example .env
-
-# 4. 创建必要目录
-mkdir -p data logs config
-```
-
-## 配置说明
-
-### 环境变量配置
-
-编辑 `.env` 文件，配置以下选项：
+关键字段（完整列表与注释见 `.env.example`）：
 
 ```env
-# YouTube API配置（可选，用于真实搜索）
-YOUTUBE_API_KEY=your_youtube_api_key_here
+# 下载（可选 API；推荐 cookies 绕过机器人检测；按需配代理）
+YOUTUBE_API_KEY=
+YOUTUBE_COOKIES_FILE=
+PROXY=                       # 例如 http://127.0.0.1:7897，自动应用到所有 yt-dlp 操作
 
-# Bilibili认证信息（上传功能必需）
-BILIBILI_SESSDATA=your_sessdata_here
-BILIBILI_BILI_JCT=your_bili_jct_here
-BILIBILI_DedeUserID=your_dedeuserid_here
+# 上传到 B 站（必需）
+BILIBILI_SESSDATA=
+BILIBILI_BILI_JCT=
+BILIBILI_DedeUserID=
 
-# 下载配置
+# 字幕翻译（LLM，可指向 OpenAI / DeepSeek 等兼容端点）
+OPENAI_API_KEY=
+OPENAI_BASE_URL=
+OPENAI_MODEL=
+
+# 下载与编码
 DOWNLOAD_PATH=./data
-MAX_VIDEO_SIZE_MB=500
-VIDEO_QUALITY=720p
+VIDEO_QUALITY=1080p
+FFMPEG_HWACCEL=auto          # auto/nvenc/qsv/amf/videotoolbox/vaapi/none
+FFMPEG_PRESET=fast
 
-# 上传配置
-UPLOAD_COOLDOWN_HOURS=2
-AUTO_PUBLISH=false
-
-# 日志配置
+# 日志
 LOG_LEVEL=INFO
 LOG_FILE=./logs/app.log
 ```
 
-### 获取配置信息
+获取 B 站认证：登录网页版 B 站 → F12 开发者工具 → Network → 任一请求 Headers 的 Cookie 中提取 `SESSDATA` / `bili_jct` / `DedeUserID`。
 
-#### YouTube API密钥（可选）
-1. 访问 [Google Cloud Console](https://console.cloud.google.com/)
-2. 创建新项目或选择现有项目
-3. 启用 YouTube Data API v3
-4. 创建API密钥并复制到配置文件
+## 使用示例
 
-#### Bilibili认证信息（上传必需）
-1. 登录Bilibili网页版
-2. 打开浏览器开发者工具 (F12)
-3. 在Network标签页刷新页面
-4. 找到任意请求，在Headers中找到Cookie
-5. 提取以下值：
-   - `SESSDATA`
-   - `bili_jct`
-   - `DedeUserID`
+每个视频会生成独立子目录 `data/{YouTuber名}|{video_id}/`，内含视频、`zh.srt`（双语字幕）、`video_description.txt`、封面等。
 
-## 使用方法
+### 示例 1：完整端到端工作流（推荐）
 
-### 1. 基本使用
+一条命令完成：下载 → 翻译字幕 → 嵌入双语字幕 → 上传。
 
 ```bash
-# 激活虚拟环境
-source .venv/bin/activate
-
-# 运行主程序（搜索热门视频）
-python -m src.main
-
-# 或使用命令行工具
-yt2bl
+yt2bl --full-workflow "https://www.youtube.com/watch?v=VIDEO_ID"
 ```
 
-### 2. 指定参数运行
+示例输出（节选，`步骤 1/5 … 5/5`）：
+
+```
+🚀 YouTube 到 Bilibili 完整工作流
+==================================================
+✅ 配置检查通过
+
+📥 步骤 1/5: 获取视频信息并下载
+✅ 视频信息获取成功: <视频标题>
+✅ 视频下载完成: <title>.mp4
+
+🌐 步骤 2/5: 翻译字幕
+📝 找到字幕文件: en.srt
+✅ 字幕翻译完成: zh.srt
+
+🎬 步骤 3/5: 嵌入双语字幕到视频
+✅ 字幕嵌入完成: <title>.mp4
+
+📤 步骤 4/5: 上传到 Bilibili
+标题: 中文标题 | YouTuber名
+✅ 上传成功!
+
+🎊 步骤 5/5: 完成
+   BV 号: BV1xxxxxxxx
+   链接: https://www.bilibili.com/video/BV1xxxxxxxx
+🎊 完整工作流执行完成！
+```
+
+> 上传成功后会自动：把 video_id 写入订阅历史（防重复处理），并在 `data/` 下视频文件夹超过 10 个时清理。
+
+### 示例 2：两步工作流（先准备，再上传）
+
+适合先检查产出再上传：
 
 ```bash
-# 限制下载数量
-python -m src.main --max-videos 5
+# 第 1 步：下载 + 翻译 + 修复时间轴 + 嵌入字幕 + 生成简介（不上传）
+yt2bl --prepare "https://www.youtube.com/watch?v=VIDEO_ID"
+# 完成后会打印文件夹名和对应的上传命令，例如：
+#   yt2bl --upload-folder "ChannelName|VIDEO_ID"
 
-# 下载指定URL的视频
-python -m src.main --url "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-
-# 下载指定频道的视频
-python -m src.main --channel-id "@username"
-python -m src.main --channel-id "UC1234567890"
+# 第 2 步：上传准备好的文件夹（直接上传，无确认提示）
+yt2bl --upload-folder "ChannelName|VIDEO_ID"
 ```
 
-### 3. 程序化使用
+### 示例 3：下载频道视频
+
+```bash
+# 支持 @username、UC...ID 或完整频道 URL，自动下载前 N 个（非交互）
+yt2bl --channel-id "@username" --max-videos 5
+yt2bl --channel-id "UC1234567890" --max-videos 3
+```
+
+### 示例 4：字幕独立操作
+
+```bash
+# 翻译英文字幕为双语（生成 zh.srt，支持断点续传）
+yt2bl --translate-subs path/to/subs.en.srt
+
+# SRT 转 ASS（双语分别样式）
+yt2bl --convert-to-ass path/to/zh.srt
+
+# 把双语字幕硬编码进视频
+yt2bl --embed-bilingual video.mp4 zh.srt
+
+# 从双语字幕生成视频简介
+yt2bl --gen-description zh.srt
+```
+
+### 示例 5：订阅监控（定时搬运）
+
+监控器是**一次性**命令，由 crontab 或 systemd timer 定时触发；频道列表写在 `youtuber.txt`（每行一个 `@username` / `UC...ID` / 完整 URL）。
+
+```bash
+# 单次检查：对每个频道取最新 3 个视频，跳过已处理的，对新视频跑完整工作流
+python -m src.subscription_monitor
+
+# 也可禁用翻译/嵌入：
+python -m src.subscription_monitor --no-translate --no-embed
+
+# 包装脚本（先校验 .env / youtuber.txt / B 站配置，再转发参数）
+./scripts/run_subscription_monitor.sh
+```
+
+防卡死看门狗（终止超过阈值的监控进程并清理 `.updating` 锁）：
+
+```bash
+python scripts/monitor_subscription.py --dry-run      # 仅检查
+python scripts/monitor_subscription.py --timeout 6    # 超过 6 小时则终止
+```
+
+部署方式见 `scripts/crontab.example`、`scripts/install_systemd.sh`、`scripts/monitor_README.md`。
+
+### 示例 6：程序化使用
 
 ```python
 import asyncio
 from src.main import YouTubeToBilibili
 
 async def main():
-    # 创建应用实例
-    app = YouTubeToBilibili()
-    
-    # 搜索并下载视频
-    videos = await app.search_and_download(max_videos=5)
-    
-    # 处理下载结果
-    for video in videos:
-        print(f"已下载: {video.title}")
-        if hasattr(video, 'downloaded_path'):
-            print(f"文件路径: {video.downloaded_path}")
+    # 创建实例；如需上传/翻译，按需传参
+    app = YouTubeToBilibili(enable_upload=True, translate_subs=True)
 
-# 运行程序
+    # 按频道搜索并下载（非交互，下载全部）
+    videos = await app.search_and_download_by_channel("@username", max_videos=5)
+    for v in videos:
+        print(f"已下载: {v.title}")
+        if hasattr(v, "downloaded_path"):
+            print(f"  文件: {v.downloaded_path}")
+
+    # 完整工作流（下载→翻译→嵌入→上传）
+    await app.run_full_workflow("https://www.youtube.com/watch?v=VIDEO_ID")
+
 asyncio.run(main())
 ```
 
-## 功能特性
+## 功能特性（均已实现）
 
-### ✅ 已实现功能
-
-1. **YouTube视频搜索**
-   - 智能搜索计算机科学相关视频
-   - 支持关键词过滤和质量评分
-   - 自动去重和排序
-
-2. **视频下载**
-   - 使用yt-dlp进行真实视频下载
-   - 支持多种视频质量选择（480p, 720p, 1080p）
-   - 自动下载字幕和封面
-   - 文件大小限制保护
-
-3. **视频处理**
-   - 自动视频格式转换
-   - 字幕处理和翻译
-   - 封面优化
-
-4. **用户界面**
-   - Rich库美化的命令行界面
-   - 实时下载进度显示
-   - 交互式视频选择
-
-5. **配置管理**
-   - 灵活的环境变量配置
-   - Pydantic数据验证
-   - 完善的日志系统
-
-### 🚧 开发中功能
-
-1. **Bilibili上传**
-   - 自动登录和认证
-   - 视频上传和发布
-   - 内容优化和标签生成
-
-2. **批量处理**
-   - 任务队列管理
-   - 定时任务支持
-   - 断点续传
-
-## 使用示例
-
-### 示例1：搜索并下载热门视频
-
-```bash
-$ python -m src.main --max-videos 3
-
-🚀 YouTube to Bilibili 视频搬运工具
-==================================================
-✅ 配置检查通过
-下载目录: ./data
-视频质量: 720p
-最大文件大小: 500MB
-
-🔍 正在搜索计算机领域热门视频...
-
-搜索结果 (共3个):
-┏━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━┳━━━━━━━━━━┓
-┃ 序号 ┃ 标题                                   ┃ 频道               ┃ 观看/点赞       ┃ 评分 ┃ 发布时间 ┃
-┡━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━╇━━━━━━━━━━┩
-│ 1  │ Python Tutorial for Beginners         │ Programming Hub    │ 1200k/45k     │ 8.5  │ 12-20    │
-│ 2  │ Machine Learning Explained            │ Tech Academy       │ 890k/32k      │ 7.8  │ 12-18    │
-│ 3  │ JavaScript ES6 Features               │ Code Masters       │ 650k/28k      │ 7.2  │ 12-15    │
-└────┴────────────────────────────────────────┴────────────────────┴───────────────┴──────┴──────────┘
-
-请选择要下载的视频（输入序号，多个用逗号分隔，或输入 'all' 下载全部）[1]: 1,2
-
-📥 下载中 (1/2): Python Tutorial for Beginners...
-✅ 下载完成: Python_Tutorial_for_Beginners_[abc123].mp4
-
-📥 下载中 (2/2): Machine Learning Explained...
-✅ 下载完成: Machine_Learning_Explained_[def456].mp4
-
-🎉 成功下载 2 个视频
-
-📋 下载摘要:
-1. Python Tutorial for Beginners...
-   文件: Python_Tutorial_for_Beginners_[abc123].mp4 (45.2MB)
-2. Machine Learning Explained...
-   文件: Machine_Learning_Explained_[def456].mp4 (67.8MB)
-
-🎊 程序执行完成！
-```
-
-### 示例2：下载指定URL视频
-
-```bash
-$ python -m src.main --url "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-
-🚀 YouTube to Bilibili 视频搬运工具
-==================================================
-✅ 配置检查通过
-
-📥 正在下载视频...
-✅ 下载完成: Rick_Astley_Never_Gonna_Give_You_Up_[dQw4w9WgXcQ].mp4 (30.9MB)
-```
-
-### 示例3：下载频道视频
-
-```bash
-$ python -m src.main --channel-id "@ProgrammingWithMosh" --max-videos 5
-
-🚀 YouTube to Bilibili 视频搬运工具
-==================================================
-🔍 正在获取频道 @ProgrammingWithMosh 的视频...
-
-# 显示频道视频列表，用户选择下载...
-```
+- **搜索/下载**：YouTube Data API（可选，无则 mock）+ yt-dlp 真实下载；DASH 1080p+ 合并；自动下载字幕与封面；CS 内容过滤与质量评分
+- **字幕翻译**：LLM 批量翻译为双语（英文+中文），格式校验+重试，翻译缓存支持断点续传
+- **字幕处理**：SRT↔ASS 转换（中英分样式）、时间轴重叠修复、双语字幕硬编码嵌入（FFmpeg）
+- **B 站上传**：转载上传（`copyright=2`，`source`=YouTube URL，含转载声明）；上传时由 LLM 生成中文标题（5–20 字）、标签（3–6 个）、简介
+- **订阅监控**：一次性 cron/timer 驱动，单例锁（`.updating`）+ 看门狗 + 持久化历史
+- **配置/日志**：环境变量集中配置（Pydantic），分级日志
 
 ## 项目结构
 
 ```
-youtube-projects/
-├── src/                          # 源代码目录
+yt2bl/
+├── src/
 │   ├── __init__.py
-│   ├── main.py                   # 主程序入口
-│   ├── __main__.py               # 模块运行入口
-│   ├── youtube/                  # YouTube相关模块
-│   │   ├── __init__.py
-│   │   ├── models.py             # 数据模型
-│   │   ├── searcher.py           # 视频搜索
-│   │   └── downloader.py         # 视频下载
-│   ├── bilibili/                 # Bilibili相关模块
-│   │   ├── __init__.py
-│   │   ├── uploader.py           # 视频上传
-│   │   └── content_optimizer.py  # 内容优化
-│   ├── core/                     # 核心处理模块
-│   │   ├── __init__.py
+│   ├── __main__.py               # python -m src 入口
+│   ├── main.py                   # CLI 入口 (YouTubeToBilibili)
+│   ├── subscription_monitor.py   # 订阅监控（一次性，cron/timer 触发）
+│   ├── youtube/
+│   │   ├── models.py             # YouTubeVideo 数据模型
+│   │   ├── searcher.py           # 搜索（频道/热门）
+│   │   └── downloader.py         # 下载（yt-dlp）
+│   ├── bilibili/
+│   │   ├── models.py             # BilibiliVideo 模型
+│   │   ├── uploader.py           # B 站上传
+│   │   └── content_optimizer.py  # 标题/标签/简介生成（LLM）
+│   ├── core/
 │   │   ├── video_processor.py    # 视频处理
-│   │   └── subtitle_processor.py # 字幕处理
-│   └── utils/                    # 工具模块
-│       ├── __init__.py
-│       ├── config.py             # 配置管理
-│       └── logger.py             # 日志管理
-├── test/                         # 测试文件
-│   ├── test_youtube_searcher.py
-│   └── test_video_processor.py
-├── data/                         # 视频存储目录
-├── logs/                         # 日志文件目录
-├── scripts/                      # 脚本文件
-│   ├── run_dev.sh               # 开发运行脚本
-│   ├── quick_test.sh            # 快速测试脚本
-│   └── test_minimal.sh          # 最小测试脚本
-├── config/                       # 配置文件目录
-├── .env                         # 环境变量配置
-├── .env.example                 # 环境变量示例
-├── pyproject.toml               # 项目配置
-├── setup.py                     # 安装脚本
-├── setup.sh                     # 一键安装脚本
-├── README.md                    # 项目说明
-├── PROJECT_PLAN.md              # 项目规划
-├── PROJECT_STATUS.md            # 项目状态
-└── example.md                   # 使用说明（本文件）
+│   │   └── subtitle_processor.py # 字幕翻译/转换/嵌入
+│   └── utils/
+│       ├── config.py             # 配置（.env）
+│       ├── logger.py             # 日志
+│       ├── llm_client.py         # 共享 OpenAI 客户端
+│       └── fix_you_srt_tl.py     # 字幕时间轴修复工具
+├── prompts/                      # LLM 提示词模板（运行时读取）
+│   ├── translate.md
+│   ├── description.md
+│   ├── generate_title.md
+│   └── generate_tags.md
+├── test/                         # 单元测试（pytest）
+├── scripts/                      # 运维脚本（监控、看门狗、systemd/crontab 示例）
+├── data/                         # 视频存储（运行时生成，.gitignore）
+├── logs/                         # 日志（运行时生成，.gitignore）
+├── .env.example                  # 环境变量示例（复制为 .env，.gitignore）
+├── youtuber.txt                  # 订阅频道列表（用户创建，.gitignore）
+├── pyproject.toml                # 项目配置与依赖
+├── uv.lock                       # uv 锁定文件
+├── CLAUDE.md                     # 开发指南
+├── INSTALL_GUIDE.md              # 安装指南
+├── README.md                     # 项目说明
+└── example.md                    # 使用示例（本文件）
 ```
 
 ## 故障排除
 
-### 常见问题
+1. **下载失败 / 被识别为机器人**
+   - 配置 `YOUTUBE_COOKIES_FILE`（Netscape 格式）
+   - 网络受限时配置 `PROXY`
+   - 升级 yt-dlp：`pip install -U yt-dlp`
 
-1. **搜索无结果**
-   ```
-   问题：运行程序后显示"未找到符合条件的视频"
-   解决：
-   - 检查网络连接
-   - 如果没有配置YouTube API，程序会使用模拟数据
-   - 确认API密钥配置正确
-   ```
+2. **1080p 下载或字幕嵌入报错**
+   - 确认 `ffmpeg -version` 可用；DASH 流需 FFmpeg 合并独立视频/音频轨
 
-2. **下载失败**
-   ```
-   问题：视频下载过程中出现错误
-   解决：
-   - 确认已安装 yt-dlp: pip install yt-dlp
-   - 检查网络连接和代理设置
-   - 查看日志文件获取详细错误信息: tail -f logs/app.log
-   - 某些视频可能有地区限制或需要认证
-   ```
+3. **字幕翻译失败**
+   - 确认 `OPENAI_API_KEY` 已配置；第三方端点需设 `OPENAI_BASE_URL` / `OPENAI_MODEL`
+   - 翻译支持断点续传（缓存 `data/{author}|{id}/zh.cache.json`），中断后重跑即可继续
 
-3. **依赖问题**
-   ```
-   问题：导入模块失败或缺少依赖
-   解决：
-   - 重新安装依赖: pip install -e .
-   - 确认Python版本 >= 3.9
-   - 激活虚拟环境: source .venv/bin/activate
-   ```
+4. **依赖/导入问题**
+   - 重新安装：`pip install -e .`
+   - 确认已激活虚拟环境且 Python ≥ 3.9
 
-4. **配置问题**
-   ```
-   问题：程序无法读取配置或配置验证失败
-   解决：
-   - 检查 .env 文件是否存在
-   - 确认配置格式正确
-   - 查看配置示例: cat .env.example
-   ```
-
-### 日志查看
+### 查看日志
 
 ```bash
-# 查看完整日志
-tail -f logs/app.log
-
-# 查看错误日志
-grep ERROR logs/app.log
-
-# 查看最近的日志
-tail -n 50 logs/app.log
+tail -f logs/app.log            # 实时日志
+grep ERROR logs/app.log         # 仅错误
+LOG_LEVEL=DEBUG python -m src.main   # 或在 .env 中设置 LOG_LEVEL=DEBUG
 ```
 
-### 调试模式
+## 开发与测试
 
 ```bash
-# 设置调试级别
-export LOG_LEVEL=DEBUG
-python -m src.main
-
-# 或在 .env 文件中设置
-LOG_LEVEL=DEBUG
-```
-
-## 开发和测试
-
-### 运行测试
-
-```bash
-# 安装开发依赖
-pip install -e ".[dev]"
-
-# 运行所有测试
-pytest test/ -v
-
-# 运行特定测试
-pytest test/test_youtube_searcher.py -v
-
-# 快速功能测试
-./scripts/quick_test.sh
-```
-
-### 代码格式化
-
-```bash
-# 使用ruff检查和格式化
-ruff check --fix src/
-ruff format src/
-
-# 类型检查
-mypy src/
-```
-
-### 开发环境运行
-
-```bash
-# 使用开发脚本
-./scripts/run_dev.sh
-
-# 或直接运行
-export PYTHONPATH="$(pwd):$PYTHONPATH"
-python -m src.main
+pip install -e ".[dev]"         # 安装开发工具
+pytest test/ -v                 # 全部测试
+pytest test/test_subtitle_translation.py -v   # 单个测试文件
+ruff check --fix src/ && ruff format src/     # 代码检查/格式化
+mypy src/                       # 类型检查
 ```
 
 ## 注意事项
 
-### 版权和合规
-- **版权尊重**: 本工具仅供学习和交流使用，请尊重原创者版权
-- **服务条款**: 请遵守YouTube和Bilibili的服务条款
-- **转载声明**: 建议获得原作者许可后再进行转载，并标注视频来源
-- **内容审核**: 确保转载内容符合平台规范和法律法规
-
-### 使用建议
-- **频率控制**: 合理控制下载和上传频率，避免触发平台限制
-- **内容质量**: 做好内容筛选和审核，确保转载内容质量
-- **认证更新**: 定期更新Bilibili认证信息，避免认证过期
-- **监控日志**: 定期查看日志文件，及时处理异常情况
-
-### 技术限制
-- **网络依赖**: 依赖稳定的网络环境，可能需要代理访问YouTube
-- **存储空间**: 视频处理需要足够的本地存储空间
-- **处理时间**: 大文件下载和处理可能耗时较长
-- **API限制**: YouTube API有请求频率和配额限制
-
-## 更新日志
-
-### v0.1.0 (当前版本)
-- ✅ 实现YouTube视频搜索和下载
-- ✅ 支持真实视频下载（yt-dlp集成）
-- ✅ 完善的配置管理和日志系统
-- ✅ Rich库美化的用户界面
-- ✅ 基础的视频处理功能
-- 🚧 Bilibili上传功能开发中
-
-### 计划功能
-- 📋 Web界面开发
-- 📋 批量处理优化
-- 📋 定时任务支持
-- 📋 视频质量分析
-- 📋 数据统计和报告
+- **版权与合规**：本工具仅供学习交流；请遵守 YouTube 与 B 站服务条款，尊重原创者版权，转载须标注来源
+- **频率控制**：合理控制下载/上传频率，避免触发平台限制
+- **认证更新**：B 站 Cookie 通常约 1 个月过期，需定期更新
+- **技术限制**：依赖稳定网络（可能需代理）；视频处理需足够磁盘空间；YouTube API 有配额限制
 
 ## 许可证
 
-本项目采用 MIT 许可证。详情请查看 [LICENSE](LICENSE) 文件。
+本项目采用 MIT 许可证。详情见 [LICENSE](LICENSE)。
 
 ## 免责声明
 
-本工具仅供学习和研究使用。使用者需要自行承担使用本工具的法律责任，包括但不限于版权侵权、违反平台服务条款等风险。开发者不对使用本工具产生的任何后果承担责任。
+本工具仅供学习和研究使用。使用者需自行承担使用本工具的法律责任，包括但不限于版权侵权、违反平台服务条款等风险。开发者不对使用本工具产生的任何后果承担责任。
 
 ---
 
-**⚠️ 重要提醒**: 请务必遵守相关法律法规和平台规则，尊重知识产权，合理使用本工具。
-
-**📞 技术支持**: 如遇问题，请查看日志文件或提交Issue到项目仓库。
+**⚠️ 重要提醒**：请务必遵守相关法律法规和平台规则，尊重知识产权，合理使用本工具。
