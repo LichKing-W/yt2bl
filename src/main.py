@@ -10,7 +10,6 @@ from datetime import datetime
 try:
     from rich.console import Console
     from rich.table import Table
-    from rich.prompt import Confirm, Prompt
     from rich.progress import (
         Progress,
         SpinnerColumn,
@@ -218,13 +217,9 @@ class YouTubeToBilibili:
                 self.console.print("❌ 未找到符合条件的视频", style="red")
                 return []
 
-            # 显示搜索结果
-            self._display_videos(videos)
-
-            # 选择要下载的视频
-            selected_videos = self._select_videos(videos)
-            if not selected_videos:
-                return []
+            # 命令行模式：下载全部搜索结果（非交互）
+            self.console.print(f"📋 找到 {len(videos)} 个视频，开始下载...", style="blue")
+            selected_videos = videos
 
             # 下载视频
             downloaded_videos = []
@@ -307,96 +302,6 @@ class YouTubeToBilibili:
             import traceback
             self.console.print(f"❌ 搜索下载失败: {str(e)}", style="red")
             logger.error(f"搜索下载失败: {str(e)}\n{traceback.format_exc()}")
-            return []
-
-    def _display_videos(self, videos: List[YouTubeVideo]) -> None:
-        """显示视频列表"""
-        if not RICH_AVAILABLE:
-            print("\n" + "=" * 80)
-            print(f"搜索结果 (共{len(videos)}个):")
-            print("=" * 80)
-
-            for i, video in enumerate(videos, 1):
-                print(f"{i:2d}. {video.title}")
-                print(f"     频道: {video.channel_title}")
-                print(
-                    f"     观看: {(video.view_count or 0):,} | 点赞: {(video.like_count or 0):,} | 评分: {video.get_quality_score():.1f}"
-                )
-                print(
-                    f"     发布: {video.published_at.strftime('%Y-%m-%d')} | 时长: {video._parse_duration_minutes()}分钟"
-                )
-                print()
-        else:
-            table = Table(title=f"搜索结果 (共{len(videos)}个)")
-            table.add_column("序号", style="cyan", no_wrap=True, width=4)
-            table.add_column("标题", style="magenta", width=40)
-            table.add_column("频道", style="green", width=20)
-            table.add_column("观看/点赞", style="yellow", width=15)
-            table.add_column("评分", style="blue", width=6)
-            table.add_column("发布时间", style="red", width=10)
-
-            for i, video in enumerate(videos[:20], 1):
-                title = (
-                    video.title[:37] + "..." if len(video.title) > 40 else video.title
-                )
-                channel = (
-                    video.channel_title[:17] + "..."
-                    if len(video.channel_title) > 20
-                    else video.channel_title
-                )
-                views_likes = f"{(video.view_count or 0) // 1000}k/{(video.like_count or 0) // 1000}k"
-
-                table.add_row(
-                    str(i),
-                    title,
-                    channel,
-                    views_likes,
-                    f"{video.get_quality_score():.1f}",
-                    video.published_at.strftime("%m-%d"),
-                )
-
-            self.console.print(table)
-
-    def _select_videos(self, videos: List[YouTubeVideo]) -> List[YouTubeVideo]:
-        """选择要下载的视频"""
-        try:
-            while True:
-                if RICH_AVAILABLE:
-                    choice = Prompt.ask(
-                        "请选择要下载的视频（输入序号，多个用逗号分隔，或输入 'all' 下载全部）",
-                        default="1",
-                    )
-                else:
-                    choice = input(
-                        "请选择要下载的视频（输入序号，多个用逗号分隔，或输入 'all' 下载全部）[1]: "
-                    ).strip()
-                    if not choice:
-                        choice = "1"
-
-                if choice.lower() == "all":
-                    return videos
-
-                try:
-                    indices = [int(x.strip()) for x in choice.split(",")]
-                    selected = []
-
-                    for idx in indices:
-                        if 1 <= idx <= len(videos):
-                            selected.append(videos[idx - 1])
-                        else:
-                            self.console.print(
-                                f"❌ 序号 {idx} 超出范围 (1-{len(videos)})", style="red"
-                            )
-                            break
-                    else:
-                        if selected:
-                            return selected
-
-                except ValueError:
-                    self.console.print("❌ 输入格式错误，请输入有效的序号", style="red")
-
-        except (KeyboardInterrupt, EOFError):
-            self.console.print("\n取消选择", style="yellow")
             return []
 
     async def run(self, max_videos: int = 10, upload: bool = False) -> None:
@@ -505,7 +410,7 @@ class YouTubeToBilibili:
 
 
     async def search_and_download_by_channel(
-        self, channel_id: str, max_videos: int = 10, interactive: bool = False
+        self, channel_id: str, max_videos: int = 10
     ) -> List[YouTubeVideo]:
         """根据频道ID搜索并下载视频"""
         try:
@@ -533,18 +438,9 @@ class YouTubeToBilibili:
                 self.console.print("❌ 未找到该频道的视频", style="red")
                 return []
 
-            # 非交互模式：直接下载所有视频
-            if not interactive:
-                self.console.print(f"📋 找到 {len(videos)} 个视频，开始下载...", style="blue")
-                return await self._download_videos_direct(videos)
-
-            # 交互模式：显示并选择
-            self._display_videos(videos)
-            selected_videos = self._select_videos(videos)
-            if not selected_videos:
-                return []
-
-            return await self._download_videos_direct(selected_videos)
+            # 命令行模式：直接下载所有视频（非交互）
+            self.console.print(f"📋 找到 {len(videos)} 个视频，开始下载...", style="blue")
+            return await self._download_videos_direct(videos)
 
         except Exception as e:
             import traceback
@@ -1029,35 +925,6 @@ class YouTubeToBilibili:
             logger.error(f"扫描本地视频失败: {str(e)}")
             return []
 
-    def _display_local_videos(self, local_videos: List[LocalVideo]) -> None:
-        """显示本地视频列表"""
-        if not RICH_AVAILABLE:
-            print("\n" + "=" * 80)
-            print(f"本地视频 (共{len(local_videos)}个):")
-            print("=" * 80)
-
-            for i, lv in enumerate(local_videos, 1):
-                print(f"{i:2d}. {lv.filename}")
-                print(f"     大小: {lv.filesize_mb:.1f}MB | ID: {lv.video_id}")
-                print()
-        else:
-            table = Table(title=f"本地视频 (共{len(local_videos)}个)")
-            table.add_column("序号", style="cyan", no_wrap=True, width=4)
-            table.add_column("文件名", style="magenta", width=50)
-            table.add_column("大小(MB)", style="yellow", width=10)
-            table.add_column("视频ID", style="blue", width=14)
-
-            for i, lv in enumerate(local_videos, 1):
-                filename = lv.filename[:47] + "..." if len(lv.filename) > 50 else lv.filename
-                table.add_row(
-                    str(i),
-                    filename,
-                    f"{lv.filesize_mb:.1f}",
-                    lv.video_id or "未知"
-                )
-
-            self.console.print(table)
-
     async def fetch_youtube_info_for_local(self, local_videos: List[LocalVideo]) -> None:
         """为本地视频获取YouTube信息"""
         if not RICH_AVAILABLE:
@@ -1092,48 +959,6 @@ class YouTubeToBilibili:
                     else:
                         logger.debug(f"跳过无video_id的视频: {lv.filename}")
                     progress.advance(task)
-
-    def _select_local_videos(self, local_videos: List[LocalVideo]) -> List[LocalVideo]:
-        """选择要上传的本地视频"""
-        try:
-            while True:
-                if RICH_AVAILABLE:
-                    choice = Prompt.ask(
-                        "请选择要上传的视频（输入序号，多个用逗号分隔，或输入 'all' 上传全部）",
-                        default="1",
-                    )
-                else:
-                    choice = input(
-                        "请选择要上传的视频（输入序号，多个用逗号分隔，或输入 'all' 上传全部）[1]: "
-                    ).strip()
-                    if not choice:
-                        choice = "1"
-
-                if choice.lower() == "all":
-                    return local_videos
-
-                try:
-                    indices = [int(x.strip()) for x in choice.split(",")]
-                    selected = []
-
-                    for idx in indices:
-                        if 1 <= idx <= len(local_videos):
-                            selected.append(local_videos[idx - 1])
-                        else:
-                            self.console.print(
-                                f"❌ 序号 {idx} 超出范围 (1-{len(local_videos)})", style="red"
-                            )
-                            break
-                    else:
-                        if selected:
-                            return selected
-
-                except ValueError:
-                    self.console.print("❌ 输入格式错误，请输入有效的序号", style="red")
-
-        except (KeyboardInterrupt, EOFError):
-            self.console.print("\n取消选择", style="yellow")
-            return []
 
     async def upload_local_videos(self, local_videos: List[LocalVideo]) -> List:
         """上传本地视频到B站"""
@@ -1289,45 +1114,12 @@ class YouTubeToBilibili:
                 # 上传到B站
                 await self.upload_local_videos(local_videos)
             else:
-                # 未指定文件名，扫描并显示所有视频
-                local_videos = self.scan_local_videos()
-                if not local_videos:
-                    self.console.print("❌ 未找到本地视频", style="yellow")
-                    return
-
-                # 显示视频列表
-                self._display_local_videos(local_videos)
-
-                # 获取YouTube信息
-                self.console.print("📡 正在获取YouTube视频信息...", style="blue")
-                await self.fetch_youtube_info_for_local(local_videos)
-
-                # 显示获取到的信息
-                if RICH_AVAILABLE:
-                    from rich.table import Table
-                    table = Table(title="视频详细信息")
-                    table.add_column("序号", style="cyan", width=4)
-                    table.add_column("标题", style="magenta", width=40)
-                    table.add_column("频道", style="green", width=20)
-
-                    for i, lv in enumerate(local_videos[:20], 1):
-                        if lv.youtube_info:
-                            title = lv.youtube_info.title[:37] + "..." if len(lv.youtube_info.title) > 40 else lv.youtube_info.title
-                            channel = lv.youtube_info.channel_title[:17] + "..." if len(lv.youtube_info.channel_title) > 20 else lv.youtube_info.channel_title
-                            table.add_row(str(i), title, channel)
-                        else:
-                            table.add_row(str(i), "(无法获取信息)", "-")
-
-                    self.console.print(table)
-
-                # 选择要上传的视频
-                selected_videos = self._select_local_videos(local_videos)
-                if not selected_videos:
-                    self.console.print("未选择任何视频", style="yellow")
-                    return
-
-                # 上传到B站
-                await self.upload_local_videos(selected_videos)
+                # 命令行模式：未指定文件名且未使用 --all 时报错退出（非交互）
+                self.console.print(
+                    "❌ 请指定要上传的视频文件名，或使用 --all 上传 data 目录中的全部视频",
+                    style="red",
+                )
+                return
 
             self.console.print("🎊 程序执行完成！", style="bold green")
 
@@ -1430,6 +1222,56 @@ class YouTubeToBilibili:
             self.console.print(f"❌ 程序执行异常: {str(e)}", style="red")
             logger.error(f"程序执行异常: {str(e)}")
 
+    async def _embed_bilingual(
+        self,
+        video: YouTubeVideo,
+        downloaded_path: Path,
+        bilingual_subtitle_path: Path,
+        *,
+        fix_overlaps: bool = False,
+    ) -> Optional[Path]:
+        """嵌入双语字幕（zh.srt）到视频（run_full_workflow / run_prepare_only 共用）。
+
+        - fix_overlaps: 嵌入前先修复字幕时间轴重叠（run_prepare_only 使用）。
+        - 自动优先选用 {stem}_original.mp4 作为输入，保证可重复嵌入。
+        - 成功时更新 video.downloaded_path 并返回嵌入后的路径；失败返回 None。
+        """
+        if fix_overlaps and bilingual_subtitle_path.exists():
+            self.console.print("🔧 修复字幕时间轴...")
+            self.console.print(f"   修复双语字幕: {bilingual_subtitle_path.name}", style="dim")
+            import shutil
+
+            fixed_path = self.subtitle_processor.fix_subtitle_overlaps(bilingual_subtitle_path)
+            shutil.move(str(fixed_path), str(bilingual_subtitle_path))
+            self.console.print("   ✅ 双语字幕修复完成", style="green")
+
+        self.console.print(
+            f"📝 双语字幕: {bilingual_subtitle_path.name if bilingual_subtitle_path.exists() else '未找到'}",
+            style="dim",
+        )
+        if not bilingual_subtitle_path.exists():
+            self.console.print("❌ 缺少双语字幕文件，工作流停止", style="red")
+            return None
+
+        self.console.print("📝 使用双语字幕嵌入视频...")
+        parent_dir = downloaded_path.parent
+        input_video = downloaded_path
+        if not downloaded_path.stem.endswith("_original"):
+            original_video = parent_dir / f"{downloaded_path.stem}_original.mp4"
+            if original_video.exists():
+                input_video = original_video
+                logger.info(f"使用原始视频作为输入: {original_video.name}")
+
+        embedded_video_path = await self.subtitle_processor.embed_subtitles_to_video(
+            input_video, bilingual_subtitle_path
+        )
+        if not embedded_video_path:
+            self.console.print("❌ 字幕嵌入失败，工作流停止", style="red")
+            return None
+        self.console.print(f"✅ 字幕嵌入完成: {embedded_video_path.name}")
+        video.downloaded_path = str(embedded_video_path)
+        return embedded_video_path
+
     async def run_full_workflow(self, youtube_url: str) -> None:
         """运行完整的端到端工作流
 
@@ -1479,44 +1321,11 @@ class YouTubeToBilibili:
             # 步骤 3: 嵌入双语字幕到视频
             self.console.print(f"\n🎬 步骤 3/5: 嵌入双语字幕到视频", style="bold blue")
 
-            # 查找翻译后的双语字幕
-            parent_dir = downloaded_path.parent
-
-            # 调试：列出文件夹中的所有文件
-            all_files = list(parent_dir.glob("*"))
-            self.console.print(f"📂 视频文件夹中的文件:", style="dim")
-            for f in all_files:
-                self.console.print(f"   - {f.name}", style="dim")
-
-            # 双语字幕路径（统一为 zh.srt）
-            bilingual_subtitle_path = parent_dir / "zh.srt"
-
-            self.console.print(f"📝 双语字幕: {bilingual_subtitle_path.name if bilingual_subtitle_path.exists() else '未找到'}", style="dim")
-
-            if bilingual_subtitle_path.exists():
-                # 使用双语字幕直接嵌入
-                self.console.print("📝 使用双语字幕嵌入视频...")
-
-                # 确保使用 _original.mp4 作为输入
-                input_video = downloaded_path
-                if not downloaded_path.stem.endswith("_original"):
-                    original_video = parent_dir / f"{downloaded_path.stem}_original.mp4"
-                    if original_video.exists():
-                        input_video = original_video
-                        logger.info(f"使用原始视频作为输入: {original_video.name}")
-
-                embedded_video_path = await self.subtitle_processor.embed_subtitles_to_video(
-                    input_video, bilingual_subtitle_path
-                )
-                if embedded_video_path:
-                    self.console.print(f"✅ 字幕嵌入完成: {embedded_video_path.name}")
-                    # 更新视频路径为嵌入字幕后的视频
-                    video.downloaded_path = str(embedded_video_path)
-                else:
-                    self.console.print("❌ 字幕嵌入失败，工作流停止", style="red")
-                    return
-            else:
-                self.console.print("❌ 缺少双语字幕文件，工作流停止", style="red")
+            bilingual_subtitle_path = downloaded_path.parent / "zh.srt"
+            embedded_video_path = await self._embed_bilingual(
+                video, downloaded_path, bilingual_subtitle_path
+            )
+            if not embedded_video_path:
                 return
 
             # 步骤 4: 上传到 Bilibili
@@ -1611,44 +1420,10 @@ class YouTubeToBilibili:
 
             # 双语字幕路径（统一为 zh.srt）
             bilingual_subtitle_path = parent_dir / "zh.srt"
-
-            # 对双语字幕进行时间轴修复预处理
-            self.console.print("🔧 修复字幕时间轴...")
-            if bilingual_subtitle_path.exists():
-                self.console.print(f"   修复双语字幕: {bilingual_subtitle_path.name}", style="dim")
-                fixed_path = self.subtitle_processor.fix_subtitle_overlaps(bilingual_subtitle_path)
-                # 用修复后的字幕替换原字幕
-                import shutil
-                shutil.move(str(fixed_path), str(bilingual_subtitle_path))
-                self.console.print(f"   ✅ 双语字幕修复完成", style="green")
-
-            self.console.print(f"📝 双语字幕: {bilingual_subtitle_path.name if bilingual_subtitle_path.exists() else '未找到'}", style="dim")
-
-            if bilingual_subtitle_path.exists():
-                # 使用双语字幕直接嵌入
-                self.console.print("📝 使用双语字幕嵌入视频...")
-
-                # 确保使用 _original.mp4 作为输入
-                # 如果 downloaded_path 是最终版本（不带 _original），查找原始版本
-                input_video = downloaded_path
-                if not downloaded_path.stem.endswith("_original"):
-                    # 查找对应的 _original 文件
-                    original_video = parent_dir / f"{downloaded_path.stem}_original.mp4"
-                    if original_video.exists():
-                        input_video = original_video
-                        logger.info(f"使用原始视频作为输入: {original_video.name}")
-
-                embedded_video_path = await self.subtitle_processor.embed_subtitles_to_video(
-                    input_video, bilingual_subtitle_path
-                )
-                if embedded_video_path:
-                    self.console.print(f"✅ 字幕嵌入完成: {embedded_video_path.name}")
-                    video.downloaded_path = str(embedded_video_path)
-                else:
-                    self.console.print("❌ 字幕嵌入失败，工作流停止", style="red")
-                    return
-            else:
-                self.console.print("❌ 缺少双语字幕文件，工作流停止", style="red")
+            embedded_video_path = await self._embed_bilingual(
+                video, downloaded_path, bilingual_subtitle_path, fix_overlaps=True
+            )
+            if not embedded_video_path:
                 return
 
             # 步骤 4: 生成视频简介
@@ -1777,14 +1552,8 @@ class YouTubeToBilibili:
                 if not cover_found:
                     self.console.print("未找到", style="yellow")
 
-            # 确认上传
-            self.console.print(f"\n⚠️  准备上传到B站", style="yellow")
-            from rich.prompt import Confirm
-            if not Confirm.ask("是否继续？"):
-                self.console.print("已取消上传", style="yellow")
-                return
-
-            # 上传到B站
+            # 命令行模式：直接上传（非交互）
+            self.console.print(f"\n📤 开始上传到B站...", style="blue")
             await self.upload_local_videos([local_video])
 
             self.console.print("🎊 上传流程完成！", style="bold green")
@@ -1807,7 +1576,7 @@ def cli() -> None:
     parser.add_argument("--url", type=str, help="下载指定URL的视频")
     parser.add_argument("--channel-id", type=str, help="下载指定频道的视频 (支持: @username, UC...ID, 或完整URL)")
     parser.add_argument("--upload", action="store_true", help="下载后自动上传到B站")
-    parser.add_argument("--upload-local", nargs="?", const="", metavar="FILENAME", help="上传本地视频到B站 (可指定文件名，不指定则显示列表)")
+    parser.add_argument("--upload-local", nargs="?", const="", metavar="FILENAME", help="上传本地视频到B站 (需指定文件名，或配合 --all 上传全部)")
     parser.add_argument("--all", action="store_true", help="上传data目录内所有视频 (需配合--upload-local使用)")
     parser.add_argument("--dry-run", action="store_true", help="模拟模式，不实际上传（用于测试）")
     parser.add_argument("--batch", metavar="AUTHOR_FILE", help="根据作者文件批量下载 (scripts/author_videonum.txt)")

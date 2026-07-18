@@ -414,8 +414,7 @@ class YouTubeDownloader:
         """获取格式选择器
 
         YouTube的高分辨率视频（1080p+）通常是分离的视频和音频流（DASH格式），
-        需要合并。这个格式选择器优先选择mp4 dash格式而不是m3u8格式，
-        因为m3u8格式需要JavaScript运行时来解决n challenge。
+        需要合并。这个格式选择器优先选择最佳质量的视频格式。
         """
         quality_map = {
             "480p": "480",
@@ -426,19 +425,14 @@ class YouTubeDownloader:
         height = quality_map.get(self.quality, "720")
 
         # 格式选择逻辑：
-        # 1. 优先选择mp4 dash格式（避免m3u8的n challenge问题）
-        # 2. 然后选择其他dash格式
-        # 3. 最后回退到m3u8格式
-        # 使用vcodec过滤器来选择特定编解码器的格式
+        # 1. 优先选择指定高度的最佳视频+最佳音频（需要合并）
+        # 2. 然后选择指定高度的单文件视频（不需要合并）
+        # 3. 最后回退到最佳可用格式
         format_selector = (
-            f"vcodec^=avc1[height<={height}]+bestaudio/"  # 优先mp4 dash (avc1)
-            f"bestvideo[height<={height}][ext=mp4]+bestaudio[ext=m4a]/"  # mp4视频+m4a音频
-            f"bestvideo[height<={height}][ext=mp4]+bestaudio/"  # mp4视频+任意音频
-            f"bestvideo[height<={height}]+bestaudio/"  # 任意视频+音频
-            f"best[height<={height}]/"  # 单文件
-            f"best"  # 最后回退到最佳可用格式
+            f"bestvideo[height<={height}]+bestaudio/best[height<={height}]/best"
         )
 
+        logger.info(f"使用视频格式选择器: quality={self.quality}, height<={height}")
         return format_selector
 
     def _check_file_size(self, info: Dict[str, Any]) -> bool:

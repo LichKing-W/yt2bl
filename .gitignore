@@ -177,3 +177,8 @@ config.json
 .kiro
 .claude
 .ruff_cache
+
+# 订阅监控器运行标记文件
+.updating
+subscription_history.json
+youtuber.txt

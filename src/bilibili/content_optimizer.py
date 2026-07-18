@@ -2,13 +2,13 @@
 
 import re
 from pathlib import Path
-from typing import List, Dict, Any, Optional
-from datetime import datetime
+from typing import List, Optional
 
-from ..utils.logger import logger
 from ..utils.config import settings
+from ..utils.llm_client import llm_complete
+from ..utils.logger import logger
 from ..youtube.models import YouTubeVideo
-from .models import BilibiliVideo, BilibiliCategory
+from .models import BilibiliVideo
 
 
 class BilibiliContentOptimizer:
@@ -361,47 +361,19 @@ class BilibiliContentOptimizer:
         model: str = "gpt-4o-mini",
     ) -> str:
         """调用LLM生成标题"""
-        try:
-            import openai
-
-            # 构建客户端参数
-            client_kwargs = {"api_key": api_key}
-            if base_url:
-                client_kwargs["base_url"] = base_url
-                logger.info(f"使用自定义API端点: {base_url}")
-
-            client = openai.AsyncOpenAI(**client_kwargs)
-
-            # 构建用户输入
-            user_input = f"""原始标题：{original_title}
+        user_input = f"""原始标题：{original_title}
 视频简介：
 {description}"""
-
-            # 调用API
-            response = await client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": prompt_template},
-                    {"role": "user", "content": user_input},
-                ],
-                temperature=0.7,
-                max_tokens=100,
-            )
-
-            # 获取结果
-            result = response.choices[0].message.content.strip()
-
-            # 记录模型原始输出（用于调试）
-            logger.debug(f"[LLM标题生成原始输出]\n{result}\n[/LLM标题生成原始输出]")
-
-            return result
-
-        except ImportError:
-            logger.error("未安装openai库，请运行: pip install openai")
-            raise
-        except Exception as e:
-            logger.error(f"LLM API调用失败: {str(e)}")
-            raise
+        return await llm_complete(
+            prompt_template,
+            user_input,
+            api_key,
+            model=model,
+            base_url=base_url,
+            temperature=0.7,
+            max_tokens=100,
+            debug_label="LLM标题生成",
+        )
 
     def _parse_llm_title(self, title_text: str) -> Optional[str]:
         """解析LLM返回的标题文本
@@ -679,42 +651,16 @@ class BilibiliContentOptimizer:
         model: str = "gpt-4o-mini",
     ) -> str:
         """调用LLM生成标签"""
-        try:
-            import openai
-
-            # 构建客户端参数
-            client_kwargs = {"api_key": api_key}
-            if base_url:
-                client_kwargs["base_url"] = base_url
-                logger.info(f"使用自定义API端点: {base_url}")
-
-            client = openai.AsyncOpenAI(**client_kwargs)
-
-            # 调用API
-            response = await client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": prompt_template},
-                    {"role": "user", "content": description},
-                ],
-                temperature=0.5,
-                max_tokens=200,
-            )
-
-            # 获取结果
-            result = response.choices[0].message.content.strip()
-
-            # 记录模型原始输出（用于调试）
-            logger.debug(f"[LLM标签生成原始输出]\n{result}\n[/LLM标签生成原始输出]")
-
-            return result
-
-        except ImportError:
-            logger.error("未安装openai库，请运行: pip install openai")
-            raise
-        except Exception as e:
-            logger.error(f"LLM API调用失败: {str(e)}")
-            raise
+        return await llm_complete(
+            prompt_template,
+            description,
+            api_key,
+            model=model,
+            base_url=base_url,
+            temperature=0.5,
+            max_tokens=200,
+            debug_label="LLM标签生成",
+        )
 
     def _parse_llm_tags(self, tags_text: str) -> List[str]:
         """解析LLM返回的标签文本
