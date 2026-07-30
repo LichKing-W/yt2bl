@@ -371,7 +371,10 @@ class BilibiliContentOptimizer:
             model=model,
             base_url=base_url,
             temperature=0.7,
-            max_tokens=100,
+            # 给推理类模型（如 DeepSeek-R1 / deepseek-v4-flash）留足预算：
+            # max_tokens 限制的是 completion（含 reasoning_content 思考过程）总量，
+            # 设得太小会导致思考过程耗尽配额、正式标题为空（finish_reason='length'）。
+            max_tokens=2048,
             debug_label="LLM标题生成",
         )
 
@@ -658,7 +661,9 @@ class BilibiliContentOptimizer:
             model=model,
             base_url=base_url,
             temperature=0.5,
-            max_tokens=200,
+            # 推理类模型的思考过程同样计入 max_tokens 配额，需留足余量，
+            # 否则可能因思考耗尽配额而返回空内容。
+            max_tokens=2048,
             debug_label="LLM标签生成",
         )
 

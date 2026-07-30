@@ -57,8 +57,17 @@ async def llm_complete(
             temperature=temperature,
             max_tokens=max_tokens,
         )
-        result = response.choices[0].message.content.strip()
+        choice = response.choices[0]
+        result = (choice.message.content or "").strip()
         logger.debug(f"[{debug_label}原始输出]\n{result}\n[/{debug_label}原始输出]")
+        # 诊断推理类模型（如 DeepSeek-R1 / deepseek-v4-flash）特有的失败：
+        # 思考过程（reasoning_content）耗尽 max_tokens 配额，导致正式输出为空。
+        if not result and choice.finish_reason == "length":
+            logger.warning(
+                f"{debug_label}: 输出为空且触发 finish_reason=length，"
+                "可能是推理模型的思考过程耗尽了 max_tokens="
+                f"{max_tokens} 配额，请增大 max_tokens 后重试"
+            )
         return result
     except Exception as e:
         logger.error(f"LLM API调用失败: {str(e)}")
